@@ -71,6 +71,7 @@ class RWLState:
     mock_mode: bool = field(default=False)
     push_commits: bool = field(default=False)
     original_prompt: str = field(default="")
+    phase_recovered: bool = field(default=False)
 
 
 def setup_signal_handlers(state: RWLState) -> None:
@@ -315,7 +316,7 @@ def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
     """Generate the initial implementation plan prompt with optional CLI prompt prepended."""
     combined = f"{cli_prompt}\n{state.original_prompt}".strip()
 
-    return f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
+    return f"""You are creating an initial implementation plan.
 
     TASK:
     {combined}
@@ -329,7 +330,7 @@ def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
     - Break the task into manageable sub-tasks
     - Identify dependencies between tasks
     - Prioritize tasks that enable subsequent work
-    - Consider testing, documentation, and polish tasks
+    - Consider testing, documentation, and software engineering standards
     - Do NOT over-specify with irrelevant information
 
     PLAN FORMAT:
@@ -353,8 +354,7 @@ def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
 
 
 def generate_plan_review_prompt(state: RWLState) -> str:
-    return f"""You are RWL Plus AI coding assistant. Your
-    task is to review an implementation plan.
+    return f"""You are reviewing an implementation plan.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
@@ -376,9 +376,8 @@ def generate_plan_review_prompt(state: RWLState) -> str:
 
 
 def generate_revise_plan_prompt(state: RWLState) -> str:
-    return f"""You are RWL Plus AI coding assistant. Your
-    task is to revise an implementation plan to incorporate and address the critique
-    from the reviewer.
+    return f"""You are revising an implementation plan to incorporate and address
+    the critique from the reviewer.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
@@ -386,34 +385,44 @@ def generate_revise_plan_prompt(state: RWLState) -> str:
     INSTRUCTIONS:
     1. Read the plan written to implementation_plan.md.
     2. Read the analysis/critique provided in plan.review.md.
-    3. Consider carefully what parts of the analysis/critique are valid and which are not.
-    4. If there were any valid points to the analysis/critique, update implementation_plan.md
+    3. Consider carefully what parts of the analysis/critique are valid and which
+    are not.
+    4. If there were any valid points to the analysis/critique, update
+    implementation_plan.md
     to address those concerns/incorporate that feedback.
-    5. Do NOT over-specify with irrelevant details. Leave something to the judgment of the
-    implementer.
+    5. Do NOT over-specify with irrelevant details. Leave something to the
+    judgment of the implementer.
     6. Delete the review.plan.md file when you are done."""
 
 
 def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the prompt for the BUILD phase."""
-    return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration}.
+    return f"""You are a software engineer working to complete programming tasks.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
 
     PHASE: BUILD
-    Your goal is to choose a task from the implementation_plan.md file and work toward completing it.
+    Your goal is to choose a task from the implementation_plan.md file and work
+    toward completing it.
 
     CONTEXT:
     - Current iteration: {state.iteration}
-    - {'You must NOT run tests' if state.skip_tests else 'You should run tests to validate your work'}
+    - Max iterations: {'not limited' if state.max_iterations == 0
+    else state.max_iterations}
+    - {'You must NOT run tests' if state.skip_tests
+    else 'You should run tests to validate your work'}
 
     INSTRUCTIONS:
-    1. Read the implementation_plan.md file to identify {'a task that has not been completed' if not active_task else 'the active task: ' + active_task}
-    2. Implement the task following best practices
-    3. Write what you learned, what you struggled with, and what remains to be done for this task in progress.md
-    4. Stage your changes with 'git add'
-    5. {'Create request.review.md when the task is complete' if state.enhanced_mode else 'Halt'}
+    1. Read the implementation_plan.md file to identify {'a task that has not\
+    been completed' if not active_task else ('the active task: ' + active_task)}
+    2. Review progress.md, looking for information relevant for your chosen task
+    3. Implement the task following best practices
+    4. Write what you learned, what you struggled with, and what remains to be
+    done for this task in progress.md
+    5. Stage your changes with 'git add'
+    6. {'Create request.review.md when the task is complete'
+    if state.enhanced_mode else 'Halt'}
 
     TASK SELECTION:
     - Choose the highest priority task from implementation_plan.md
@@ -423,20 +432,26 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
 
     PROGRESS TRACKING:
     - Update progress.md with: learnings, struggles, remaining work
-    - If all tasks are marked as "Done" or "Complete" in implementation_plan.md, create completed.md with exactly: <promise>COMPLETE</promise>
-
-    IMPORTANT: Focus on quality implementation and clear documentation."""
+    - If all tasks are marked as "Done" or "Complete" in implementation_plan.md,
+    create completed.md with exactly: <promise>COMPLETE</promise>
+    IMPORTANT: """ + (
+        'The previous attempt to run this phase failed. Read \
+        .ralph/recovery.notes.md for recovery information.'
+        if state.phase_recovered else
+        'Focus on quality implementation and clear documentation.'
+    )
 
 
 def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the prompt for the BUILD phase."""
-    return f"""You are RWL Plus, an AI development assistant putting the finishing touches on the project.
+    return f"""You are putting the finishing touches on the project.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
 
     PHASE - FINAL BUILD:
-    Your task is to read the review.final.md file for feedback on issues that need to be addressed, then work to address them."""
+    Your task is to read the review.final.md file for feedback on issues that need
+    to be addressed, then work to address them."""
 
 
 def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> str:
@@ -453,7 +468,8 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
         INSTRUCTIONS:
         1. Review all implemented code for quality, coherence, consistency with the task
         description/goal/acceptance criteria, and completeness.
-        2. Do not nitpick small, irrelevant issues. Focus on what really matters: completion
+        2. Do not nitpick small, irrelevant issues. Focus on what really matters:
+        completion
         of the task requirements.
         3. If you do find an issue with polish, professionalism, or code style, only point
         it out if the fix will not require a major refactor or cause more harm than good.
@@ -461,10 +477,11 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
         4. Create review.final.md with your findings
 
         OUTPUT:
-        - If everything is satisfactory: create review.final.md with the exact content PASSED
+        - If everything is satisfactory: create review.final.md with the a concise
+        analysis of work completed
         - If improvements are needed: create review.final.md with specific action items"""
     else:
-        return f"""You are reviewing the completion of a task in the development cycle.
+        prompt = f"""You are reviewing the completion of a task in the development cycle.
 
         ORIGINAL PROMPT:
         {state.original_prompt}
@@ -499,10 +516,17 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
 
         CRITICAL: You must create exactly one of review.passed.md or review.rejected.md."""
 
+    if state.phase_recovered:
+        return prompt + """
+
+        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+    else:
+        return prompt
+
 
 def generate_plan_prompt(state: RWLState) -> str:
     """Generate the prompt for the PLAN phase."""
-    return f"""You are planning the next development tasks.
+    prompt = f"""You are planning development tasks or revising an existing plan.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
@@ -512,7 +536,8 @@ def generate_plan_prompt(state: RWLState) -> str:
 
     CONTEXT:
     - Current iteration: {state.iteration}
-    - Max iterations: {'not limited' if state.max_iterations == 0 else state.max_iterations}
+    - Max iterations: {'not limited' if state.max_iterations == 0
+    else state.max_iterations}
 
     INSTRUCTIONS:
     1. Read review.rejected.md if it exists (for feedback on rejected work)
@@ -545,10 +570,17 @@ def generate_plan_prompt(state: RWLState) -> str:
 
     OUTPUT: Update implementation_plan.md with the revised plan"""
 
+    if state.phase_recovered:
+        return prompt + """
+
+        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+    else:
+        return prompt
+
 
 def generate_commit_prompt(state: RWLState) -> str:
     """Generate the prompt for the COMMIT phase."""
-    return f"""You are preparing to commit completed work.
+    prompt = f"""You are preparing to commit completed work.
 
     PHASE: COMMIT
     Your goal is to stage appropriate files and create a meaningful commit message.
@@ -576,6 +608,13 @@ def generate_commit_prompt(state: RWLState) -> str:
     2. Execute the commit with the generated message
     3. Commit locally only (pushing can be configured separately)"""
 
+    if state.phase_recovered:
+        return prompt + """
+
+        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+    else:
+        return prompt
+
 
 def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> str:
     """Generate the prompt for the RECOVERY phase."""
@@ -590,8 +629,9 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
 
     CONTEXT:
     - Current iteration: {state.iteration}
+    - Max iterations: {'not limited' if state.max_iterations == 0
+    else state.max_iterations}
     - Retry count: {state.retry_count}
-    - Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
 
     INSTRUCTIONS:
     1. Analyze what went wrong in the failed phase
@@ -607,9 +647,12 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
 
     RECOVERY OUTPUT (.ralph/recovery.notes.md):
     - Root cause analysis
-    - Specific steps to resolve the issue
-    - Prevention measures for future iterations
-    - Whether to retry the failed phase or continue with adjustments
+    - If it was a timeout:
+        - Provide guidance for continuing where the previous phase left off
+    - If it was NOT a timeout:
+        - Specific steps to resolve the issue
+        - Prevention measures for future iterations
+        - Whether to retry the failed phase or continue with adjustments
 
     GOAL: Provide actionable recovery guidance to get development back on track."""
 
@@ -905,7 +948,21 @@ def should_trigger_review(state: RWLState) -> bool:
     return False
 
 
-def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
+def retry_failed_phase(state: RWLState, failed_phase: str) -> tuple[bool, str]:
+    """Retry the specific failed phase using the same execute functions."""
+    if failed_phase == Phase.BUILD.value:
+        return execute_build_phase(state)
+    elif failed_phase == Phase.REVIEW.value:
+        return execute_review_phase(state)
+    elif failed_phase == Phase.PLAN.value:
+        return execute_plan_phase(state)
+    elif failed_phase == Phase.COMMIT.value:
+        return execute_commit_phase(state)
+    else:
+        return False, f"Unknown phase for retry: {failed_phase}"
+
+
+def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> tuple[bool, int]:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     # First check the lock
@@ -914,7 +971,6 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
 
     state.failed_phase = failed_phase
     state.last_error = error
-    state.retry_count += 1
 
     # Log the failure
     log_path = Path(f".ralph/logs/errors.log")
@@ -922,17 +978,44 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
     with open(log_path, "a") as f:
         f.write(f"{time.time()}: {failed_phase} failed: {error}\n")
 
-    # Enhanced mode: try recovery if under retry limit
-    if state.enhanced_mode and state.retry_count < PHASE_RETRY_LIMIT:
-        print(f"Attempting RECOVERY phase for {failed_phase}...")
-        recovery_success, recovery_result = execute_recovery_phase(state, failed_phase, error)
+    # Reset retry count and start recovery loop
+    state.retry_count = 0
+    recovery_success = False
+
+    # Enhanced mode: try recovery and retry until limit reached
+    while state.enhanced_mode and state.retry_count < PHASE_RETRY_LIMIT:
+        # Increment retry count at start of loop
+        state.retry_count += 1
+
+        if not recovery_success:
+            print(f"Attempting RECOVERY phase for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
+            recovery_success, recovery_result = execute_recovery_phase(state, failed_phase, error)
+
         if recovery_success:
-            print(f"Recovery successful, retrying {failed_phase}...")
-            state.retry_count = 0  # Reset after successful recovery
+            # Set phase_recovered flag for prompt generation
+            state.phase_recovered = True
+            print(f"Recovery successful, retrying {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
+
+            # Retry the failed phase
+            retry_success, retry_result = retry_failed_phase(state, failed_phase)
+
+            # Reset phase_recovered flag after retry attempt
+            state.phase_recovered = False
+
+            if retry_success:
+                print(f"Phase {failed_phase} succeeded on attempt {state.retry_count}")
+                return True, state.retry_count
+            else:
+                print(f"Retry {state.retry_count} failed for {failed_phase}: {retry_result}")
+                error = retry_result  # Update error for next recovery attempt
         else:
-            print(f"Recovery failed, continuing with current state...")
-    else:
-        print(f"Maximum retries reached for {failed_phase}, continuing...")
+            # Recovery failed - append recovery error and continue
+            print(f"Recovery failed for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT}), trying again...")
+            error += f" | Recovery error: {recovery_result}"
+            continue  # Loop back to increment retry_count and try recovery again
+
+    print(f"Phase {failed_phase} failed after {state.retry_count} retry attempts")
+    return False, state.retry_count
 
 
 def check_for_completion(state: RWLState) -> bool:
