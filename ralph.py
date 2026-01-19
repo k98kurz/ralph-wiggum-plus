@@ -408,7 +408,7 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     INSTRUCTIONS:
     1. Read the implementation_plan.md file to identify {'a task that has not been completed' if not active_task else 'the active task: ' + active_task}
     2. Implement the task following best practices
-    3. Write what you learned, what you struggled with, and what remains to be done (if the task was not complete) in progress.md
+    3. Write what you learned, what you struggled with, and what remains to be done for this task in progress.md
     4. Stage your changes with 'git add'
     5. {'Create request.review.md when the task is complete' if state.enhanced_mode else 'Halt'}
 
