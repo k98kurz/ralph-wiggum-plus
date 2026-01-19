@@ -28,15 +28,15 @@ from pathlib import Path
 
 
 # Configuration Constants
-DEFAULT_MODEL = "zen/big-pickle"
-DEFAULT_REVIEW_MODEL = "zen/big-pickle"
-OPENCODE_TIMEOUT = 600
+DEFAULT_MODEL = "opencode/big-pickle"
+DEFAULT_REVIEW_MODEL = "opencode/big-pickle"
+OPENCODE_TIMEOUT = 1200 # 20 minutes
 DEFAULT_MAX_ITERATIONS = 20
 DEFAULT_REVIEW_EVERY = 0
 PHASE_RETRY_LIMIT = 3
 RETRY_WAIT_SECONDS = 30
 RECOVERY_WAIT_SECONDS = 10
-STALE_LOCK_TIMEOUT = 1200 # 20 minutes
+STALE_LOCK_TIMEOUT = 3600 # 60 minutes
 
 
 class Phase(Enum):
@@ -545,11 +545,12 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
         return True, f"MOCK RESPONSE for: {prompt[:100]}..."
 
     try:
-        cmd = ["opencode", "run", "--model", model, prompt]
+        cmd = ["opencode", "run", "--model", model]
 
         print(f"Executing: opencode --model {model}")
         result = subprocess.run(
             cmd,
+            input=prompt,
             capture_output=True,
             text=True,
             timeout=timeout,
