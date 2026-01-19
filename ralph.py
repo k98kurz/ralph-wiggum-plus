@@ -160,7 +160,13 @@ def check_project_lock(token: str) -> bool:
         with open(lock_file, "r") as f:
             lock_data = json.load(f)
 
-        return lock_data.get("lock_token") == token
+        valid = lock_data.get("lock_token") == token
+        # update the timestamp if it is our lock, then return
+        if valid:
+            lock_data["created"] = time.time()
+            with open(lock_file, "w") as f:
+                json.dump(lock_data, f)
+        return valid
     except (json.JSONDecodeError, KeyError, OSError):
         return False
 
@@ -562,6 +568,10 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
 
 def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     initial_plan_prompt = generate_initial_plan_prompt(state)
     plan_review_prompt = generate_plan_review_prompt(state)
     revise_plan_prompt = generate_revise_plan_prompt(state)
@@ -596,6 +606,10 @@ def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
 
 def execute_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the BUILD phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print(f"Starting BUILD phase")
 
     try:
@@ -619,6 +633,10 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
 
 def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the final BUILD phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print(f"Starting final BUILD phase")
 
     try:
@@ -642,6 +660,10 @@ def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
 
 def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tuple[bool, str]:
     """Execute the REVIEW phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print("Starting REVIEW phase")
 
     try:
@@ -695,6 +717,10 @@ def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tupl
 
 def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the PLAN phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print("Starting PLAN phase")
 
     try:
@@ -734,6 +760,10 @@ def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
 
 def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the COMMIT phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print("Starting COMMIT phase")
 
     try:
@@ -769,6 +799,10 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
 
 def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     print(f"Starting RECOVERY phase for {failed_phase}")
 
     try:
@@ -811,9 +845,13 @@ def should_trigger_review(state: RWLState) -> bool:
     return False
 
 
-def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLState:
+def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
+
     state.failed_phase = failed_phase
     state.last_error = error
     state.retry_count += 1
@@ -836,8 +874,6 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLS
     else:
         print(f"Maximum retries reached for {failed_phase}, continuing...")
 
-    return state
-
 
 def check_for_completion(state: RWLState) -> bool:
     """Checks for a completed.md file."""
@@ -850,8 +886,9 @@ def check_for_completion(state: RWLState) -> bool:
 
 def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
-    if not state.enhanced_mode:
-        return
+    # First check the lock
+    if not check_project_lock(state.lock_token):
+        raise Error('lost the lock; aborting loop')
 
     print("Running final review cycle...")
 
@@ -884,8 +921,7 @@ def main_loop(state: RWLState) -> None:
         # Always run BUILD phase
         success, result = execute_build_phase(state)
         if not success:
-            state = handle_phase_failure(state, Phase.BUILD.value, result)
-            continue
+            handle_phase_failure(state, Phase.BUILD.value, result)
 
         state.iteration += 1
         state.phase_history.append(f"BUILD_{state.iteration}")
@@ -901,24 +937,24 @@ def main_loop(state: RWLState) -> None:
                         commit_success, commit_result = execute_commit_phase(state)
                         state.phase_history.append(f"COMMIT_{state.iteration}")
                         if not commit_success:
-                            state = handle_phase_failure(state, Phase.COMMIT.value, commit_result)
+                            handle_phase_failure(state, Phase.COMMIT.value, commit_result)
                     elif Path("review.rejected.md").exists():
                         plan_success, plan_result = execute_plan_phase(state)
                         state.phase_history.append(f"PLAN_{state.iteration}")
                         if not plan_success:
-                            state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
+                            handle_phase_failure(state, Phase.PLAN.value, plan_result)
             else:
                 plan_success, plan_result = execute_plan_phase(state)
                 state.phase_history.append(f"PLAN_{state.iteration}")
                 if not plan_success:
-                    state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
+                    handle_phase_failure(state, Phase.PLAN.value, plan_result)
 
         # Classic mode logic
         else:
             plan_success, plan_result = execute_plan_phase(state)
             state.phase_history.append(f"PLAN_{state.iteration}")
             if not plan_success:
-                state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
+                handle_phase_failure(state, Phase.PLAN.value, plan_result)
 
         # Check for completion promise
         state.is_complete = check_for_completion(state)

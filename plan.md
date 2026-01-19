@@ -226,7 +226,7 @@ def should_trigger_review(state: RWLState) -> bool:
 
     return False
 
-def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLState:
+def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     state.failed_phase = failed_phase
@@ -250,8 +250,6 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLS
             print(f"Recovery failed, continuing with current state...")
     else:
         print(f"Maximum retries reached for {failed_phase}, continuing...")
-
-    return state
 
 def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
