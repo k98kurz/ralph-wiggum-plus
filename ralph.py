@@ -105,35 +105,24 @@ def validate_environment() -> None:
 
 def get_project_lock() -> str | None:
     """Create a project lock file and return the lock token."""
-    lock_file = Path("ralph.lock.md")
+    lock_file = Path("ralph.lock.json")
 
     # Check for existing lock
     if lock_file.exists():
         try:
             with open(lock_file, "r") as f:
-                content = f.read().strip()
+                lock_data = json.load(f)
 
-            # Parse existing lock
-            lines = content.split('\n')
-            token_line = next((line for line in lines if line.startswith("RALPH_LOCK_TOKEN:")), None)
-            created_line = next((line for line in lines if line.startswith("CREATED:")), None)
-
-            if token_line and created_line:
-                # Check if lock is stale (older than 1 hour)
-                try:
-                    timestamp_str = created_line.split(": ", 1)[1]
-                    created_time = float(timestamp_str)
-                    if time.time() - created_time < 3600:  # 1 hour
-                        print("ERROR: Project is locked by another RWL instance")
-                        return None
-                    else:
-                        print("WARNING: Removing stale lock file")
-                        lock_file.unlink()
-                except ValueError:
-                    print("WARNING: Invalid lock file format, removing")
-                    lock_file.unlink()
-        except Exception as e:
-            print(f"WARNING: Error reading lock file: {e}, removing")
+            # Check if lock is stale (older than 1 hour)
+            created_time = lock_data.get("created", 0)
+            if time.time() - created_time < 3600:  # 1 hour
+                print("ERROR: Project is locked by another RWL instance")
+                return None
+            else:
+                print("WARNING: Removing stale lock file")
+                lock_file.unlink()
+        except (json.JSONDecodeError, KeyError, OSError) as e:
+            print(f"WARNING: Invalid lock file format, removing: {e}")
             try:
                 lock_file.unlink()
             except:
@@ -145,13 +134,15 @@ def get_project_lock() -> str | None:
     timestamp = time.time()
     pid = os.getpid()
 
-    lock_content = f"""RALPH_LOCK_TOKEN: {token}
-CREATED: {timestamp}
-PID: {pid}"""
+    lock_data = {
+        "lock_token": token,
+        "created": timestamp,
+        "pid": pid
+    }
 
     try:
         with open(lock_file, "w") as f:
-            f.write(lock_content)
+            json.dump(lock_data, f)
         return token
     except Exception as e:
         print(f"ERROR: Cannot create lock file: {e}")
@@ -160,18 +151,17 @@ PID: {pid}"""
 
 def check_project_lock(token: str) -> bool:
     """Check if the project lock is still valid."""
-    lock_file = Path("ralph.lock.md")
+    lock_file = Path("ralph.lock.json")
 
     if not lock_file.exists():
         return False
 
     try:
         with open(lock_file, "r") as f:
-            content = f.read().strip()
+            lock_data = json.load(f)
 
-        # Check if our token is in the file
-        return f"RALPH_LOCK_TOKEN: {token}" in content
-    except Exception:
+        return lock_data.get("lock_token") == token
+    except (json.JSONDecodeError, KeyError, OSError):
         return False
 
 
@@ -180,18 +170,17 @@ def release_project_lock(token: str | None) -> None:
     if not token:
         return
 
-    lock_file = Path("ralph.lock.md")
+    lock_file = Path("ralph.lock.json")
 
     try:
         if lock_file.exists():
             with open(lock_file, "r") as f:
-                content = f.read().strip()
+                lock_data = json.load(f)
 
-            # Only remove if it's our lock
-            if f"RALPH_LOCK_TOKEN: {token}" in content:
+            if lock_data.get("lock_token") == token:
                 lock_file.unlink()
                 print("Project lock released")
-    except Exception as e:
+    except (json.JSONDecodeError, KeyError, OSError) as e:
         print(f"WARNING: Error releasing lock: {e}")
 
 

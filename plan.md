@@ -27,6 +27,7 @@ logic.
     - request.review.md
     - review.rejected.md
     - review.passed.md
+    - review.final.md
     - progress.md
     - recovery.notes.md
 
@@ -74,7 +75,7 @@ project-root/
 ├── request.review.md                  # Created by BUILD, deleted by REVIEW
 ├── review.passed.md                  # Created by REVIEW, deleted by COMMIT
 ├── review.rejected.md                # Created by REVIEW, deleted by PLAN
-├── ralph.lock.md                     # Project lock file
+├── ralph.lock.json                     # Project lock file
 └── .ralph/                          # Runtime state directory
     ├── state.json                    # Current state (backup for crash recovery)
     ├── logs/                        # Logs for debugging/tracing activities
@@ -96,10 +97,9 @@ RECOVERY_WAIT_SECONDS = 10
 ```
 
 ### 2. Locking Mechanism
-- `get_project_lock()`: Creates `ralph.lock.md` with `token_hex(16)` and timestamp
-- `check_project_lock()`: Reads `ralph.lock.md` on each iteration; exits if file doesn't exist or contains wrong token
+- `get_project_lock()`: Creates `ralph.lock.json` with `token_hex(16)` and timestamp
+- `check_project_lock()`: Reads `ralph.lock.json` on each iteration; exits if file doesn't exist or contains wrong token
 - `release_project_lock()`: Removes lock file on normal exit
-- Lock file format: `RALPH_LOCK_TOKEN: <token>\nCREATED: <timestamp>\nPID: <process_id>`
 - Prevents multiple RWL instances in same directory
 - Includes stale lock detection (locks older than 1 hour considered stale)
 
@@ -199,6 +199,9 @@ class RWLState:
     last_error: str | None = field(default=None)
     final_review_requested: bool = field(default=False)
     is_complete: bool = field(default=False)
+    mock_mode: bool = field(default=False)
+    push_commits: bool = field(default=False)
+    original_prompt: str = field(default="")
 
 class Phase(Enum):
     BUILD = "BUILD"
