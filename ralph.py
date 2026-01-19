@@ -248,9 +248,9 @@ def load_state_from_disk() -> RWLState | None:
         return None
 
 
-def generate_build_meta_prompt(state: RWLState, active_task: str|None = None) -> str:
+def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the meta-prompt for the BUILD phase."""
-    meta_prompt = f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
+    return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
@@ -281,38 +281,44 @@ PROGRESS TRACKING:
 
 IMPORTANT: Focus on quality implementation and clear documentation."""
 
-    return meta_prompt
 
-
-def generate_review_meta_prompt(state: RWLState, is_final_review: bool = False) -> str:
-    """Generate the meta-prompt for the REVIEW phase."""
-    if is_final_review:
-        meta_prompt = f"""You are conducting a FINAL REVIEW of the completed implementation.
+def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -> str:
+    """Generate the meta-prompt for the BUILD phase."""
+    return f"""You are RWL Plus, an AI development assistant putting the finishing touches on the project.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
 
-PHASE: FINAL REVIEW
+PHASE - FINAL BUILD:
+Your task is to read the review.final.md file for feedback on issues that need to be addressed, then work to address them.
+"""
+
+
+def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> str:
+    """Generate the meta-prompt for the REVIEW phase."""
+    if is_final_review:
+        return f"""You are conducting a FINAL REVIEW of the completed implementation.
+
+ORIGINAL PROMPT:
+{state.original_prompt}
+
+PHASE - FINAL REVIEW:
 Your goal is to ensure the implementation is polished and ready for delivery.
 
 INSTRUCTIONS:
-1. Review all implemented code for quality, consistency, and completeness
+1. Review all implemented code for quality, consistency, completeness, and overall polish/professionalism
 2. Check for proper documentation, code style, and best practices
-3. Identify any remaining issues or improvements needed
+3. Identify any remaining issues or improvements that are needed
 4. Create review.final.md with your findings
 
-REVIEW CRITERIA:
-- Code quality and maintainability
-- Documentation completeness
-- Test coverage (unless tests were skipped)
-- Adherence to project requirements
-- Overall polish and professionalism
-
 OUTPUT:
-- If everything is satisfactory: create review.passed.md
-- If improvements are needed: create review.rejected.md with specific action items"""
+- If everything is satisfactory: create review.final.md with the exact content PASSED
+- If improvements are needed: create review.final.md with specific action items"""
     else:
-        meta_prompt = f"""You are reviewing the completion of a task in the development cycle.
+        return f"""You are reviewing the completion of a task in the development cycle.
+
+ORIGINAL PROMPT:
+{state.original_prompt}
 
 PHASE: REVIEW
 Your goal is to evaluate if the completed task meets quality standards.
@@ -330,17 +336,19 @@ REVIEW CRITERIA:
 - Documentation: Is the code properly documented?
 
 OUTPUT FORMAT:
-- If PASSED: Create review.passed.md with approval and any minor suggestions
-- If REJECTED: Create review.rejected.md with specific issues and action items
+- If PASSED:
+    - Create review.passed.md with approval and any minor suggestions
+    - Update the status of any relevant tasks in the implementation_plan.md file from "In Review" to "Done"
+- If REJECTED:
+    - Create review.rejected.md with specific issues and action items
+    - Update the status of the rejected tasks in the implementation_plan.md file from "In Review" to "In Progress"
 
-CRITICAL: You must create exactly one of these files."""
-
-    return meta_prompt
+CRITICAL: You must create exactly one of review.passed.md or review.rejected.md."""
 
 
-def generate_plan_meta_prompt(state: RWLState) -> str:
+def generate_plan_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the PLAN phase."""
-    meta_prompt = f"""You are planning the next development tasks.
+    return f"""You are planning the next development tasks.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
@@ -362,22 +370,31 @@ TASK PRIORITIZATION:
 - Address any issues from review.rejected.md first
 - Focus on remaining implementation work
 - Consider dependencies between tasks
-- Prioritize tasks that unblock other work
+- Note any blockers
 
 PLAN FORMAT:
-- Use clear, actionable task descriptions
-- Mark tasks as priority: [HIGH], [MEDIUM], [LOW]
-- Include acceptance criteria for complex tasks
-- Keep tasks focused and achievable
+# Implementation Plan
+
+## Tasks
+
+### TASK_NAME
+
+- Status: Pending
+- Description: TASK_DESCRIPTION
+- Acceptance Criteria:
+    - CRITERION_1
+    - CRITERION_2
+    - CRITERION_3
+
+## Dependencies
+Note any task dependencies or prerequisites
 
 OUTPUT: Update implementation_plan.md with the revised plan"""
 
-    return meta_prompt
 
-
-def generate_commit_meta_prompt(state: RWLState) -> str:
+def generate_commit_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the COMMIT phase."""
-    meta_prompt = f"""You are preparing to commit completed work.
+    return f"""You are preparing to commit completed work.
 
 PHASE: COMMIT
 Your goal is to stage appropriate files and create a meaningful commit message.
@@ -405,12 +422,10 @@ ACTIONS:
 2. Execute the commit with the generated message
 3. Commit locally only (pushing can be configured separately)"""
 
-    return meta_prompt
 
-
-def generate_recovery_meta_prompt(state: RWLState, failed_phase: str, error: str) -> str:
+def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> str:
     """Generate the meta-prompt for the RECOVERY phase."""
-    meta_prompt = f"""You are diagnosing and recovering from a phase failure.
+    return f"""You are diagnosing and recovering from a phase failure.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
@@ -443,8 +458,6 @@ RECOVERY OUTPUT (.ralph/recovery.notes.md):
 - Whether to retry the failed phase or continue with adjustments
 
 GOAL: Provide actionable recovery guidance to get development back on track."""
-
-    return meta_prompt
 
 
 def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
@@ -518,6 +531,7 @@ PLAN FORMAT:
 Note any task dependencies or prerequisites
 
 OUTPUT: Create implementation_plan.md with your plan"""
+
     plan_review_prompt = f"""You are RWL Plus AI coding assistant. Your
 task is to review an implementation plan.
 
@@ -589,10 +603,10 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
 
     try:
         # Generate build meta-prompt
-        meta_prompt = generate_build_meta_prompt(state)
+        prompt = generate_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(meta_prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
 
         if success:
             print("BUILD phase completed successfully")
@@ -602,6 +616,29 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
 
     except Exception as e:
         error_msg = f"BUILD phase error: {e}"
+        print(f"ERROR: {error_msg}")
+        return False, error_msg
+
+
+def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
+    """Execute the final BUILD phase."""
+    print(f"Starting final BUILD phase")
+
+    try:
+        # Generate build meta-prompt
+        prompt = generate_final_build_prompt(state)
+
+        # Execute via OpenCode
+        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+
+        if success:
+            print("Final BUILD phase completed successfully")
+            return True, result
+        else:
+            return False, result
+
+    except Exception as e:
+        error_msg = f"Final BUILD phase error: {e}"
         print(f"ERROR: {error_msg}")
         return False, error_msg
 
@@ -626,10 +663,10 @@ def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tupl
             request_file.unlink()
 
         # Generate review meta-prompt
-        meta_prompt = generate_review_meta_prompt(state, is_final_review)
+        prompt = generate_review_prompt(state, is_final_review)
 
         # Execute via OpenCode
-        success, result = call_opencode(meta_prompt, state.review_model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.review_model, mock_mode=state.mock_mode)
 
         if success:
             # Verify that exactly one of the required files was created
@@ -677,10 +714,10 @@ def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
                 progress_content = f.read()
 
         # Generate plan meta-prompt
-        meta_prompt = generate_plan_meta_prompt(state)
+        prompt = generate_plan_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(meta_prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
 
         if success:
             # Clean up review.rejected.md if it existed
@@ -712,10 +749,10 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
             return False, "review.passed.md not found"
 
         # Generate commit meta-prompt
-        meta_prompt = generate_commit_meta_prompt(state)
+        prompt = generate_commit_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(meta_prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
 
         if success:
             # Clean up review.passed.md
@@ -742,10 +779,10 @@ def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tu
         time.sleep(RECOVERY_WAIT_SECONDS)
 
         # Generate recovery meta-prompt
-        meta_prompt = generate_recovery_meta_prompt(state, failed_phase, error)
+        prompt = generate_recovery_prompt(state, failed_phase, error)
 
         # Execute via OpenCode
-        success, result = call_opencode(meta_prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
 
         if success:
             print("RECOVERY phase completed successfully")
@@ -828,7 +865,7 @@ def run_final_review_cycle(state: RWLState) -> None:
         return
 
     # BUILD phase (address review concerns rather than task)
-    build_success, build_result = execute_build_phase(state)
+    build_success, build_result = execute_final_build_phase(state)
     if not build_success:
         print("Final build failed, exiting...")
         return

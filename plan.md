@@ -351,25 +351,19 @@ it will first PLAN → REVIEW → PLAN → REVIEW → PLAN to generate it.
 - Validate lock file doesn't exist or is stale
 - Create `.ralph/logs/` directory structure if missing
 
-### Git Integration Requirements
-- All git operations use subprocess with proper error handling
-- Check git status before staging files
-- Handle merge conflicts if they arise
-- Support both local commits and optional pushing
-- Preserve git history with meaningful commit messages
-
 ### OpenCode Integration Details
 - Subprocess calls: `opencode run --model <model> "<prompt>"`
 - Timeout: 10 minutes per phase (configurable)
 - Capture both stdout and stderr for logging
 - Handle API key errors and network timeouts
-- Retry logic for transient failures (separate from phase retry logic)
 
 ## Type Annotations
 Python 3.10+ syntax throughout:
-- Use `tuple[bool, str] | None` instead of `Optional[Tuple[bool, str]]`
+- Use `tuple[bool, str] | None`
+- DO NOT use `Optional[Tuple[bool, str]]`
 - Modern union syntax for all type hints
 - Dataclasses for structured data
+- DO NOT `import from typing` or `import from types`
 
 ## Error Handling
 - Retry logic for phase failures (max 3 retries; 30 second wait between retries)
