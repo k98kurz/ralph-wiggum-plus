@@ -67,6 +67,7 @@ class RalphState:
     final_review_requested: bool = field(default=False)
     is_complete: bool = field(default=False)
     mock_mode: bool = field(default=False)
+    push_commits: bool = field(default=False)
 
 
 def setup_signal_handlers(state: RalphState) -> None:
@@ -566,8 +567,11 @@ to address those concerns/incorporate that feedback.
         success, result = call_opencode(
             revise_plan_prompt, state.model, mock_mode=state.mock_mode
         )
+        total_result += f'\n\n{result}'
         if not success:
-            return False, result
+            return False, total_result
+
+    return True, total_result
 
 def execute_build_phase(state: RalphState) -> Tuple[bool, str]:
     """Execute the BUILD phase."""
@@ -999,7 +1003,8 @@ def main() -> int:
         max_iterations=args.max_iterations,
         final_review_requested=args.final_review,
         mock_mode=args.mock_mode,
-        start_time=time.time()
+        start_time=time.time(),
+        push_commits=args.push_commits,
     )
 
     # Set up signal handlers
