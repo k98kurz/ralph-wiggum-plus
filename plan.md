@@ -6,7 +6,7 @@ Single-file Python implementation of enhanced RWL loop with four-phase cycle (BU
 ## Important Note
 
 While building, under no circumstance is it acceptable to test ralph.py in a way that
-executes the opencode command. The only acceptable things to test are the metaprompt
+executes the opencode command. The only acceptable things to test are the prompt
 generation, file creation/deletion/updating logic (non-agentic), and state transition
 logic.
 
@@ -111,7 +111,7 @@ RECOVERY_WAIT_SECONDS = 10
 - Recovery state includes: phase history, error log, recovery notes
 
 ### 4. Meta-Prompt Generators (separate functions)
-- `generate_build_meta_prompt()`: Embeds original prompt + phase instructions
+- `generate_build_prompt()`: Embeds original prompt + phase instructions
   - Includes iteration context, file existence checks, task selection guidance
   - Includes instructions to create a `completed.md` file with contents "<promise>COMPLETE</promise>"
     if there is nothing left to do in the `implementation_plan.md` plan file
@@ -120,17 +120,17 @@ RECOVERY_WAIT_SECONDS = 10
   - Includes instructions to write learnings, struggles, etc to a `progress.md` file
   - Enhanced mode: instructions to create `request.review.md` when a task is complete
   - Classic mode: simpler task completion instructions
-- `generate_review_meta_prompt()`: Review criteria and output requirements
+- `generate_review_prompt()`: Review criteria and output requirements
   - Reads `request.review.md` content and provides structured review framework
   - Must output either `review.passed.md` or `review.rejected.md`
   - Final review mode: different instructions for final polish cycle
-- `generate_plan_meta_prompt()`: Gap analysis and plan updates
+- `generate_plan_prompt()`: Gap analysis and plan updates
   - Incorporates `review.rejected.md` feedback and `progress.md` learnings
   - Updates `implementation_plan.md` with prioritized tasks
-- `generate_commit_meta_prompt()`: File staging and commit logic
+- `generate_commit_prompt()`: File staging and commit logic
   - Reads `review.passed.md` and stages appropriate files
   - Generates conventional commit messages
-- `generate_recovery_meta_prompt()`: Error diagnosis and recovery steps
+- `generate_recovery_prompt()`: Error diagnosis and recovery steps
   - Analyzes failed phase output and system state
   - Provides specific recovery recommendations
 
@@ -428,5 +428,5 @@ The project will be assessed by a human engineer for the following:
 7. Meta-prompts generate appropriate AI instructions
 
 Do NOT attempt to test for these success criteria. The ONLY testing that is acceptable
-will be for metaprompt generation functions, non-agentic file creation/deletion/updating
+will be for prompt generation functions, non-agentic file creation/deletion/updating
 methods, and state transition logic.
