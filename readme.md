@@ -1,8 +1,78 @@
 # Ralph Wiggum Plus for OpenCode
 
-A Free and Open Source Slopware project. Development is ongoing. The first test
-is about to be run. I will put some actual effort into this readme after it is
-working.
+An open-source iterative development tool (Free and Open Source Slopware).
+Development is ongoing; I am currently integrating feedback from experimentation.
+This project is not yet stable or battle tested (feedback and pull requests are
+welcome). Use at your own risk.
+
+## Features
+
+- **Agentic Fail-Forward**: Embraces failure as a diagnostic signal to drive
+  subsequent development iterations.
+- **Dynamic Three-Phase Loop**: Supports both basic BUILD-PLAN and enhanced
+  BUILD-REVIEW-PLAN/COMMIT workflows. Opt-in with `--enhanced`; default is
+  simpler BUILD-PLAN loop.
+- **Session Resumption**: Crash recovery and manual resumption via persistent
+  state tracking.
+- **Process Archiving**: Automatic, deduplicated archiving of all intermediate
+  prompts and reviews for audit and debugging.
+- **Project Locking**: JSON lock files prevent simultaneous RWL processes in the
+  same project. Locks include timestamps to detect and handle stale locks from
+  terminated processes.
+- **Phase Recovery System**: Dedicated recovery phase for diagnosing and
+  overcoming transient failures or timeouts.
+
+## Usage
+
+Ralph is a single-file Python script. You can drop it anywhere in your `$PATH`
+(e.g., `~/.local/bin/ralph`) and run it directly from your project root.
+
+```text
+usage: ralph.py [-h] [--max-iterations MAX_ITERATIONS] [--skip-tests]
+                [--review-every REVIEW_EVERY] [--enhanced] [--final-review]
+                [--model MODEL] [--review-model REVIEW_MODEL] [--push-commits]
+                [--mock-mode] [--resume] [--force-resume]
+                [prompt]
+
+Enhanced RWL - AI Development Assistant
+
+positional arguments:
+  prompt                The task description for RWL to work on
+
+options:
+  -h, --help            show this help message and exit
+  --max-iterations MAX_ITERATIONS
+                        Maximum number of iterations (default: 20)
+  --skip-tests          Skip running tests during development
+  --review-every REVIEW_EVERY
+                        Trigger REVIEW phase every N iterations (default: 0,
+                        enhanced mode only)
+  --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-
+                        COMMIT)
+  --final-review        Run final REVIEW → BUILD → COMMIT cycle after
+                        completion
+  --model MODEL         AI model to use for development (default:
+                        opencode/big-pickle)
+  --review-model REVIEW_MODEL
+                        AI model to use for reviews (default: opencode/big-
+                        pickle)
+  --push-commits        Push commits to remote repository after successful
+                        commit
+  --mock-mode           Use mock mode for testing (no external AI calls)
+  --resume              Resume from a previous session using saved state in
+                        .ralph/state.json
+  --force-resume        Force resume by removing any existing lock file
+                        (bypasses staleness check)
+
+Examples:
+  ralph.py "Build a web scraper for news articles"
+  ralph.py --enhanced "Create a REST API with tests"
+  ralph.py --enhanced --final-review "Complex multi-module project"
+  ralph.py --review-every 3 "Regular review cycles"
+  ralph.py --mock-mode "Test without external dependencies"
+  ralph.py --resume "Resume interrupted session"
+  ralph.py --force-resume "Force resume with stale lock"
+```
 
 ## Development Loops
 
@@ -14,21 +84,28 @@ working.
 The Ralph Wiggum technique is named after the Simpsons character who keeps trying
 despite perpetual failure. In agentic AI coding, this philosophy means embracing
 failures as learning opportunities rather than dead ends. The approach prioritizes
-simplicity over complex orchestration—using a deterministic loop that mimics how
-real engineers work.
+an iterative approach where failures are recycled into future attempts.
 
-**Core Mechanics**: An AI agent picks a task from implementation_plan.md, implements
-it, writes learnings and struggles to progress.md, then requests review. If rejected,
-the feedback informs the next planning cycle. If passed, changes are committed and
-the loop continues. File-based state signals (request.review.md, review.passed.md,
-review.rejected.md) pass context between phases, while .ralph/state.json enables
-crash recovery for unattended operation.
+**Core Loop**: An AI agent picks a task from implementation_plan.md, implements
+it, writes learnings and struggles to progress.md. Then a planning phase updates
+the implementation_plan.md file as necessary to align with things learned in the
+build phase. The loop then continues until the build agent signals completion, or
+when the max_iterations are hit.
+
+**Enhanced Loop**: An AI agent picks a task from implementation_plan.md, implements
+it, writes learnings and struggles to progress.md, then requests review whtn the
+task is comple. If rejected, the feedback informs the next planning cycle. If it
+passed the review phase, the changes are committed and the loop continues.
+File-based state signals (request.review.md, review.passed.md, review.rejected.md)
+pass context between phases, while .ralph/state.json enables crash recovery for
+unattended operation. Like the basic loop, it ends when an agent signals completion.
 
 **Engineering Benefits**: Small, iterative changes with robust feedback loops make
 debugging easier and commits bisect-friendly. Deterministic context allocation
-manages "context rot" effectively. Simpler infrastructure means predictable unit
-economics — models like Claude Opus 4.5 are now capable enough that minimal
-orchestration works reliably.
+manages "context rot" effectively. Intermediate files are archived in
+`.ralph/archive/` to provide a complete audit trail of the agent's thought process.
+Simpler infrastructure means predictable unit economics — models like Claude
+Opus 4.5 are now capable enough that minimal orchestration works reliably.
 
 ## ISC License
 
