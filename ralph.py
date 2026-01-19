@@ -237,7 +237,7 @@ def load_state_from_disk() -> RWLState | None:
         return None
 
 
-def generate_initial_plan(state: RWLState) -> str:
+def generate_initial_plan_prompt(state: RWLState) -> str:
     return f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
 
     ORIGINAL PROMPT:
