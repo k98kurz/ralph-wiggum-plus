@@ -15,9 +15,11 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import enum
+import hashlib
 import json
 import os
 import pathlib
+import shutil
 import signal
 import subprocess
 import sys
@@ -86,6 +88,67 @@ def setup_logging() -> None:
     """Set up logging directory structure."""
     logs_dir = Path(".ralph/logs")
     logs_dir.mkdir(parents=True, exist_ok=True)
+
+
+# Global state for archiving
+ARCHIVED_HASHES: set[str] = set()
+
+
+def populate_archived_hashes(lock_token: str) -> None:
+    """Populate the in-memory hash set from existing archives for this token."""
+    archive_dir = Path(".ralph/archive")
+    if not archive_dir.exists():
+        return
+
+    for archive_file in archive_dir.glob(f"{lock_token}.*"):
+        try:
+            content = archive_file.read_bytes()
+            file_hash = hashlib.sha256(content).hexdigest()
+            ARCHIVED_HASHES.add(file_hash)
+        except Exception as e:
+            print(f"WARNING: Could not read archive file {archive_file}: {e}")
+
+
+def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
+    """Archive an intermediate file with a timestamp prefix if it hasn't been archived yet."""
+    if not file_path.exists():
+        return
+
+    try:
+        content = file_path.read_bytes()
+        file_hash = hashlib.sha256(content).hexdigest()
+
+        if file_hash in ARCHIVED_HASHES:
+            return
+
+        archive_dir = Path(".ralph/archive")
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = int(time.time())
+        archive_name = f"{lock_token}.{timestamp}.{file_path.name}"
+        archive_path = archive_dir / archive_name
+
+        shutil.copy2(file_path, archive_path)
+        ARCHIVED_HASHES.add(file_hash)
+        print(f"Archived: {file_path.name} -> {archive_name}")
+    except Exception as e:
+        print(f"WARNING: Could not archive {file_path}: {e}")
+
+
+def archive_any_process_files(lock_token: str) -> None:
+    """Check for and archive any intermediate files."""
+    files_to_archive = [
+        "request.review.md",
+        "review.passed.md",
+        "review.rejected.md",
+        "review.final.md",
+        "plan.review.md",
+        "implementation_plan.md",
+        "progress.md",
+        ".ralph/recovery.notes.md",
+    ]
+    for file_name in files_to_archive:
+        archive_intermediate_file(Path(file_name), lock_token)
 
 
 def validate_environment() -> None:
@@ -191,8 +254,9 @@ def release_project_lock(token: str | None) -> None:
         print(f"WARNING: Error releasing lock: {e}")
 
 
-def cleanup_process_files() -> None:
+def cleanup_process_files(lock_token: str) -> None:
     """Clean up lingering process files after successful completion."""
+    archive_any_process_files(lock_token)
     files_to_remove = [
         "request.review.md",
         "review.rejected.md",
@@ -328,7 +392,7 @@ def generate_revise_plan_prompt(state: RWLState) -> str:
 
 
 def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
-    """Generate the meta-prompt for the BUILD phase."""
+    """Generate the prompt for the BUILD phase."""
     return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
 
     ORIGINAL PROMPT:
@@ -362,7 +426,7 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
 
 
 def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -> str:
-    """Generate the meta-prompt for the BUILD phase."""
+    """Generate the prompt for the BUILD phase."""
     return f"""You are RWL Plus, an AI development assistant putting the finishing touches on the project.
 
     ORIGINAL PROMPT:
@@ -373,7 +437,7 @@ def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -
 
 
 def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> str:
-    """Generate the meta-prompt for the REVIEW phase."""
+    """Generate the prompt for the REVIEW phase."""
     if is_final_review:
         return f"""You are conducting a FINAL REVIEW of the completed implementation.
 
@@ -425,7 +489,7 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
 
 
 def generate_plan_prompt(state: RWLState) -> str:
-    """Generate the meta-prompt for the PLAN phase."""
+    """Generate the prompt for the PLAN phase."""
     return f"""You are planning the next development tasks.
 
     ORIGINAL PROMPT:
@@ -471,7 +535,7 @@ def generate_plan_prompt(state: RWLState) -> str:
 
 
 def generate_commit_prompt(state: RWLState) -> str:
-    """Generate the meta-prompt for the COMMIT phase."""
+    """Generate the prompt for the COMMIT phase."""
     return f"""You are preparing to commit completed work.
 
     PHASE: COMMIT
@@ -502,7 +566,7 @@ def generate_commit_prompt(state: RWLState) -> str:
 
 
 def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> str:
-    """Generate the meta-prompt for the RECOVERY phase."""
+    """Generate the prompt for the RECOVERY phase."""
     return f"""You are diagnosing and recovering from a phase failure.
 
     ORIGINAL PROMPT:
@@ -538,7 +602,7 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
     GOAL: Provide actionable recovery guidance to get development back on track."""
 
 
-def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
+def call_opencode(prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
     """Call OpenCode with the given prompt and return success status and output."""
     if mock_mode:
         # Mock mode for testing
@@ -556,6 +620,8 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
             timeout=timeout,
             cwd=Path.cwd()
         )
+
+        archive_any_process_files(lock_token)
 
         if result.returncode == 0:
             return True, result.stdout
@@ -582,7 +648,7 @@ def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, 
 
     # Execute the plan generation
     success, result = call_opencode(
-        initial_plan_prompt, state.model, mock_mode=state.mock_mode
+        initial_plan_prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode
     )
     total_result = result
     if not success:
@@ -591,7 +657,7 @@ def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, 
     # Now enter plan revision loop
     for _ in range(2):
         success, result = call_opencode(
-            plan_review_prompt, state.review_model, mock_mode=state.mock_mode
+            plan_review_prompt, state.review_model, state.lock_token or "", mock_mode=state.mock_mode
         )
         total_result += f'\n\n{result}'
         if not success:
@@ -599,7 +665,7 @@ def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, 
         if not Path('plan.review.md').exists():
             return True, result
         success, result = call_opencode(
-            revise_plan_prompt, state.model, mock_mode=state.mock_mode
+            revise_plan_prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode
         )
         total_result += f'\n\n{result}'
         if not success:
@@ -611,17 +677,17 @@ def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, 
 def execute_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the BUILD phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print(f"Starting BUILD phase")
 
     try:
-        # Generate build meta-prompt
+        # Generate build prompt
         prompt = generate_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             print("BUILD phase completed successfully")
@@ -638,17 +704,17 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
 def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the final BUILD phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print(f"Starting final BUILD phase")
 
     try:
-        # Generate build meta-prompt
+        # Generate build prompt
         prompt = generate_final_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             print("Final BUILD phase completed successfully")
@@ -665,8 +731,8 @@ def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
 def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tuple[bool, str]:
     """Execute the REVIEW phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print("Starting REVIEW phase")
 
@@ -680,16 +746,11 @@ def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tupl
                 if not request_file.exists():
                     return False, "request.review.md file not found"
 
-            # Read and delete request.review.md
-            with open(request_file, "r") as f:
-                request_content = f.read()
-            request_file.unlink()
-
-        # Generate review meta-prompt
+        # Generate review prompt
         prompt = generate_review_prompt(state, is_final_review)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.review_model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.review_model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             # Verify that exactly one of the required files was created
@@ -722,29 +783,17 @@ def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tupl
 def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the PLAN phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print("Starting PLAN phase")
 
     try:
-        # Read feedback files if they exist
-        review_rejected_content = ""
-        progress_content = ""
-
-        if Path("review.rejected.md").exists():
-            with open("review.rejected.md", "r") as f:
-                review_rejected_content = f.read()
-
-        if Path("progress.md").exists():
-            with open("progress.md", "r") as f:
-                progress_content = f.read()
-
-        # Generate plan meta-prompt
+        # Generate plan prompt
         prompt = generate_plan_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             # Clean up review.rejected.md if it existed
@@ -765,25 +814,20 @@ def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
 def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the COMMIT phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print("Starting COMMIT phase")
 
     try:
-        # Read review.passed.md
-        review_passed_content = ""
-        if Path("review.passed.md").exists():
-            with open("review.passed.md", "r") as f:
-                review_passed_content = f.read()
-        else:
+        if not Path("review.passed.md").exists():
             return False, "review.passed.md not found"
 
-        # Generate commit meta-prompt
+        # Generate commit prompt
         prompt = generate_commit_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             # Clean up review.passed.md
@@ -804,8 +848,8 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
 def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print(f"Starting RECOVERY phase for {failed_phase}")
 
@@ -813,11 +857,11 @@ def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tu
         # Wait briefly for transient issues to resolve
         time.sleep(RECOVERY_WAIT_SECONDS)
 
-        # Generate recovery meta-prompt
+        # Generate recovery prompt
         prompt = generate_recovery_prompt(state, failed_phase, error)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, mock_mode=state.mock_mode)
+        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
 
         if success:
             print("RECOVERY phase completed successfully")
@@ -853,8 +897,8 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str):
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     state.failed_phase = failed_phase
     state.last_error = error
@@ -891,8 +935,8 @@ def check_for_completion(state: RWLState) -> bool:
 def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
     # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        raise Exception('lost the lock; aborting loop')
 
     print("Running final review cycle...")
 
@@ -1108,6 +1152,7 @@ def main() -> int:
         print()
 
         state = loaded_state
+        populate_archived_hashes(state.lock_token) if state.lock_token else ''
         state.lock_token = None
         state.start_time = time.time()
     else:
@@ -1169,11 +1214,12 @@ def main() -> int:
         # Run main loop
         main_loop(state)
 
-        print("RWL completed successfully!")
-
         # Check if completed successfully (not by hitting max iterations)
         if state.is_complete and state.iteration < state.max_iterations:
-            cleanup_process_files()
+            print("RWL completed successfully!")
+            cleanup_process_files(state.lock_token or "")
+        else:
+            print("RWL hit max iterations and halted.")
 
         return 0
 
