@@ -1,7 +1,7 @@
-# Enhanced Ralph Wiggum Implementation Plan
+# Enhanced RWL Implementation Plan
 
 ## Overview
-Single-file Python implementation of enhanced Ralph Wiggum loop with four-phase cycle (BUILD-REVIEW-PLAN-COMMIT) and optional recovery mechanisms.
+Single-file Python implementation of enhanced RWL loop with four-phase cycle (BUILD-REVIEW-PLAN-COMMIT) and optional recovery mechanisms.
 
 ## Important Note
 
@@ -100,11 +100,11 @@ RECOVERY_WAIT_SECONDS = 10
 - `check_project_lock()`: Reads `ralph.lock.md` on each iteration; exits if file doesn't exist or contains wrong token
 - `release_project_lock()`: Removes lock file on normal exit
 - Lock file format: `RALPH_LOCK_TOKEN: <token>\nCREATED: <timestamp>\nPID: <process_id>`
-- Prevents multiple Ralph instances in same directory
+- Prevents multiple RWL instances in same directory
 - Includes stale lock detection (locks older than 1 hour considered stale)
 
 ### 3. State Management
-- In-memory tracking with `RalphState` dataclass
+- In-memory tracking with `RWLState` dataclass
 - File backup to `.ralph/state.json` for crash recovery
 - Tracks: iteration, current_phase, failed_phase, retry_count, lock_token, start_time
 - State persistence occurs after each phase completion
@@ -182,7 +182,7 @@ Arguments:
 ### Data Structures
 ```python
 @dataclass
-class RalphState:
+class RWLState:
     iteration: int = field(default=0)
     current_phase: str = field(default=Phase.BUILD.value)
     failed_phase: str | None = field(default=None)
@@ -211,7 +211,7 @@ class Phase(Enum):
 ### Critical Control Functions
 
 ```python
-def should_trigger_review(state: RalphState) -> bool:
+def should_trigger_review(state: RWLState) -> bool:
     """Determine if REVIEW phase should be triggered."""
     # Enhanced mode: check for request.review.md file
     if state.enhanced_mode and Path("request.review.md").exists():
@@ -223,7 +223,7 @@ def should_trigger_review(state: RalphState) -> bool:
 
     return False
 
-def handle_phase_failure(state: RalphState, failed_phase: str, error: str) -> RalphState:
+def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLState:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     state.failed_phase = failed_phase
@@ -250,7 +250,7 @@ def handle_phase_failure(state: RalphState, failed_phase: str, error: str) -> Ra
 
     return state
 
-def run_final_review_cycle(state: RalphState) -> None:
+def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
     if not state.enhanced_mode:
         return
@@ -277,7 +277,7 @@ def run_final_review_cycle(state: RalphState) -> None:
 
     print("Final review cycle completed successfully!")
 
-def check_for_completion(state: RalphState) -> bool:
+def check_for_completion(state: RWLState) -> bool:
     """Checks for a completed.md file."""
     try:
         with open("completed.md", "r") as f:
@@ -288,8 +288,8 @@ def check_for_completion(state: RalphState) -> bool:
 
 ### Main Loop Algorithm
 ```python
-def main_loop(state: RalphState) -> None:
-    """Main Ralph loop orchestrating all phases."""
+def main_loop(state: RWLState) -> None:
+    """Main RWL loop orchestrating all phases."""
     save_state_to_disk(state)
 
     while state.iteration < state.max_iterations and not state.is_complete:
