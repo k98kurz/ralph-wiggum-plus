@@ -330,6 +330,7 @@ def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
     - Identify dependencies between tasks
     - Prioritize tasks that enable subsequent work
     - Consider testing, documentation, and polish tasks
+    - Do NOT over-specify with irrelevant information
 
     PLAN FORMAT:
     # Implementation Plan
@@ -388,12 +389,14 @@ def generate_revise_plan_prompt(state: RWLState) -> str:
     3. Consider carefully what parts of the analysis/critique are valid and which are not.
     4. If there were any valid points to the analysis/critique, update implementation_plan.md
     to address those concerns/incorporate that feedback.
-    5. Delete the review.plan.md file when you are done."""
+    5. Do NOT over-specify with irrelevant details. Leave something to the judgment of the
+    implementer.
+    6. Delete the review.plan.md file when you are done."""
 
 
 def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the prompt for the BUILD phase."""
-    return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
+    return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration}.
 
     ORIGINAL PROMPT:
     {state.original_prompt}
@@ -402,7 +405,7 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     Your goal is to choose a task from the implementation_plan.md file and work toward completing it.
 
     CONTEXT:
-    - Current iteration: {state.iteration + 1}
+    - Current iteration: {state.iteration}
     - {'You must NOT run tests' if state.skip_tests else 'You should run tests to validate your work'}
 
     INSTRUCTIONS:
@@ -448,8 +451,12 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
         Your goal is to ensure the implementation is polished and ready for delivery.
 
         INSTRUCTIONS:
-        1. Review all implemented code for quality, consistency, completeness, and overall polish/professionalism
-        2. Check for proper documentation, code style, and best practices
+        1. Review all implemented code for quality, coherence, consistency with the task
+        description/goal/acceptance criteria, and completeness.
+        2. Do not nitpick small, irrelevant issues. Focus on what really matters: completion
+        of the task requirements.
+        3. If you do find an issue with polish, professionalism, or code style, only point
+        it out if the fix will not require a major refactor or cause more harm than good.
         3. Identify any remaining issues or improvements that are needed
         4. Create review.final.md with your findings
 
@@ -472,18 +479,23 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
         4. Create either review.passed.md OR review.rejected.md
 
         REVIEW CRITERIA:
-        - Task completion: Is the task fully implemented?
+        - Task completion: Is the task fully implemented? This is the most important
+        criterion. All else pales in comparison to consistency with the task description,
+        requirements, and acceptance criteria.
         - Code quality: Does it follow best practices?
-        - Testing: Are appropriate tests included (unless --skip-tests)?
-        - Documentation: Is the code properly documented?
+        - Testing: Are appropriate and relevant tests included?
+        - Documentation: Does the code have sufficient type annotations and
+        docblocks/docstrings?
 
         OUTPUT FORMAT:
         - If PASSED:
             - Create review.passed.md with approval and any minor suggestions
-            - Update the status of any relevant tasks in the implementation_plan.md file from "In Review" to "Done"
+            - Update the status of any relevant tasks in the implementation_plan.md
+            file from "In Review" to "Done"
         - If REJECTED:
             - Create review.rejected.md with specific issues and action items
-            - Update the status of the rejected tasks in the implementation_plan.md file from "In Review" to "In Progress"
+            - Update the status of the rejected tasks in the implementation_plan.md
+            file from "In Review" to "In Progress"
 
         CRITICAL: You must create exactly one of review.passed.md or review.rejected.md."""
 
@@ -499,8 +511,8 @@ def generate_plan_prompt(state: RWLState) -> str:
     Your goal is to update the implementation plan based on current progress and feedback.
 
     CONTEXT:
-    - Current iteration: {state.iteration + 1}
-    - Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
+    - Current iteration: {state.iteration}
+    - Max iterations: {'not limited' if state.max_iterations == 0 else state.max_iterations}
 
     INSTRUCTIONS:
     1. Read review.rejected.md if it exists (for feedback on rejected work)
@@ -577,7 +589,7 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
     Error: {error}
 
     CONTEXT:
-    - Current iteration: {state.iteration + 1}
+    - Current iteration: {state.iteration}
     - Retry count: {state.retry_count}
     - Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
 
@@ -966,12 +978,12 @@ def main_loop(state: RWLState) -> None:
     save_state_to_disk(state)
 
     while state.iteration < state.max_iterations and not state.is_complete:
+        state.iteration += 1
         # Always run BUILD phase
         success, result = execute_build_phase(state)
         if not success:
             handle_phase_failure(state, Phase.BUILD.value, result)
 
-        state.iteration += 1
         state.phase_history.append(f"BUILD_{state.iteration}")
 
         # Enhanced mode logic
@@ -1125,7 +1137,8 @@ def main() -> int:
     if args.resume or args.force_resume:
         loaded_state = load_state_from_disk()
         if not loaded_state:
-            print("ERROR: Could not load state. Run without --resume first.")
+            print("ERROR: Could not load state. Run without " +
+                f"{'--resume' if args.resume else '--force-resume'} .")
             return 1
 
         lock_file = Path("ralph.lock.json")
