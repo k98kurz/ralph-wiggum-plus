@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced Ralph Wiggum Implementation
+Enhanced RWL Implementation
 
 A self-contained Python CLI tool that orchestrates AI agent development
 through a structured four-phase cycle: BUILD-REVIEW-PLAN-COMMIT.
@@ -47,8 +47,8 @@ class Phase(Enum):
 
 
 @dataclass
-class RalphState:
-    """Represents the current state of the Ralph Wiggum process."""
+class RWLState:
+    """Represents the current state of the RWL process."""
     iteration: int = field(default=0)
     current_phase: str = field(default=Phase.BUILD.value)
     failed_phase: str | None = field(default=None)
@@ -70,7 +70,7 @@ class RalphState:
     original_prompt: str = field(default="")
 
 
-def setup_signal_handlers(state: RalphState) -> None:
+def setup_signal_handlers(state: RWLState) -> None:
     """Set up signal handlers for graceful shutdown."""
     def signal_handler(signum: int, frame) -> None:
         print(f"\nReceived signal {signum}, shutting down gracefully...")
@@ -124,7 +124,7 @@ def get_project_lock() -> str | None:
                     timestamp_str = created_line.split(": ", 1)[1]
                     created_time = float(timestamp_str)
                     if time.time() - created_time < 3600:  # 1 hour
-                        print("ERROR: Project is locked by another Ralph instance")
+                        print("ERROR: Project is locked by another RWL instance")
                         return None
                     else:
                         print("WARNING: Removing stale lock file")
@@ -216,7 +216,7 @@ def cleanup_process_files() -> None:
                 print(f"WARNING: Could not remove {file_path}: {e}")
 
 
-def save_state_to_disk(state: RalphState) -> None:
+def save_state_to_disk(state: RWLState) -> None:
     """Save the current state to disk for crash recovery."""
     state_file = Path(".ralph/state.json")
 
@@ -230,7 +230,7 @@ def save_state_to_disk(state: RalphState) -> None:
         print(f"WARNING: Error saving state: {e}")
 
 
-def load_state_from_disk() -> RalphState | None:
+def load_state_from_disk() -> RWLState | None:
     """Load state from disk for crash recovery."""
     state_file = Path(".ralph/state.json")
 
@@ -241,16 +241,16 @@ def load_state_from_disk() -> RalphState | None:
         with open(state_file, "r") as f:
             state_dict = json.load(f)
 
-        # Convert dictionary back to RalphState
-        return RalphState(**state_dict)
+        # Convert dictionary back to RWLState
+        return RWLState(**state_dict)
     except Exception as e:
         print(f"WARNING: Error loading state: {e}")
         return None
 
 
-def generate_build_meta_prompt(state: RalphState, active_task: str|None = None) -> str:
+def generate_build_meta_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the meta-prompt for the BUILD phase."""
-    meta_prompt = f"""You are Ralph Wiggum Plus, an AI development assistant working on iteration {state.iteration + 1}.
+    meta_prompt = f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
@@ -284,7 +284,7 @@ IMPORTANT: Focus on quality implementation and clear documentation."""
     return meta_prompt
 
 
-def generate_review_meta_prompt(state: RalphState, is_final_review: bool = False) -> str:
+def generate_review_meta_prompt(state: RWLState, is_final_review: bool = False) -> str:
     """Generate the meta-prompt for the REVIEW phase."""
     if is_final_review:
         meta_prompt = f"""You are conducting a FINAL REVIEW of the completed implementation.
@@ -338,7 +338,7 @@ CRITICAL: You must create exactly one of these files."""
     return meta_prompt
 
 
-def generate_plan_meta_prompt(state: RalphState) -> str:
+def generate_plan_meta_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the PLAN phase."""
     meta_prompt = f"""You are planning the next development tasks.
 
@@ -375,7 +375,7 @@ OUTPUT: Update implementation_plan.md with the revised plan"""
     return meta_prompt
 
 
-def generate_commit_meta_prompt(state: RalphState) -> str:
+def generate_commit_meta_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the COMMIT phase."""
     meta_prompt = f"""You are preparing to commit completed work.
 
@@ -408,7 +408,7 @@ ACTIONS:
     return meta_prompt
 
 
-def generate_recovery_meta_prompt(state: RalphState, failed_phase: str, error: str) -> str:
+def generate_recovery_meta_prompt(state: RWLState, failed_phase: str, error: str) -> str:
     """Generate the meta-prompt for the RECOVERY phase."""
     meta_prompt = f"""You are diagnosing and recovering from a phase failure.
 
@@ -482,9 +482,9 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
         return False, error_msg
 
 
-def generate_initial_plan(state: RalphState) -> tuple[bool, str]:
+def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
-    initial_plan_prompt = f"""You are the Ralph Wiggum Plus AI coding assistant creating an initial implementation plan.
+    initial_plan_prompt = f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
 
 ORIGINAL PROMPT:
 {state.original_prompt}
@@ -518,7 +518,7 @@ PLAN FORMAT:
 Note any task dependencies or prerequisites
 
 OUTPUT: Create implementation_plan.md with your plan"""
-    plan_review_prompt = f"""You are Ralph Wiggum Plus AI coding assistant. Your
+    plan_review_prompt = f"""You are RWL Plus AI coding assistant. Your
 task is to review an implementation plan.
 
 ORIGINAL PROMPT:
@@ -540,7 +540,7 @@ OUTPUT: Create plan.review.md with your analysis. If the plan does not need any
 updates, skip this step.
 """
 
-    revise_plan_prompt = f"""You are Ralph Wiggum Plus AI coding assistant. Your
+    revise_plan_prompt = f"""You are RWL Plus AI coding assistant. Your
 task is to revise an implementation plan to incorporate and address the critique
 from the reviewer.
 
@@ -583,7 +583,7 @@ to address those concerns/incorporate that feedback.
 
     return True, total_result
 
-def execute_build_phase(state: RalphState) -> tuple[bool, str]:
+def execute_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the BUILD phase."""
     print(f"Starting BUILD phase")
 
@@ -606,7 +606,7 @@ def execute_build_phase(state: RalphState) -> tuple[bool, str]:
         return False, error_msg
 
 
-def execute_review_phase(state: RalphState, is_final_review: bool = False) -> tuple[bool, str]:
+def execute_review_phase(state: RWLState, is_final_review: bool = False) -> tuple[bool, str]:
     """Execute the REVIEW phase."""
     print("Starting REVIEW phase")
 
@@ -659,7 +659,7 @@ def execute_review_phase(state: RalphState, is_final_review: bool = False) -> tu
         return False, error_msg
 
 
-def execute_plan_phase(state: RalphState) -> tuple[bool, str]:
+def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the PLAN phase."""
     print("Starting PLAN phase")
 
@@ -698,7 +698,7 @@ def execute_plan_phase(state: RalphState) -> tuple[bool, str]:
         return False, error_msg
 
 
-def execute_commit_phase(state: RalphState) -> tuple[bool, str]:
+def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the COMMIT phase."""
     print("Starting COMMIT phase")
 
@@ -733,7 +733,7 @@ def execute_commit_phase(state: RalphState) -> tuple[bool, str]:
         return False, error_msg
 
 
-def execute_recovery_phase(state: RalphState, failed_phase: str, error: str) -> tuple[bool, str]:
+def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
     print(f"Starting RECOVERY phase for {failed_phase}")
 
@@ -759,12 +759,12 @@ def execute_recovery_phase(state: RalphState, failed_phase: str, error: str) -> 
         return False, error_msg
 
 
-def execute_final_review_phase(state: RalphState) -> tuple[bool, str]:
+def execute_final_review_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the final REVIEW phase."""
     return execute_review_phase(state, is_final_review=True)
 
 
-def should_trigger_review(state: RalphState) -> bool:
+def should_trigger_review(state: RWLState) -> bool:
     """Determine if REVIEW phase should be triggered."""
     # Enhanced mode: check for request.review.md file
     if state.enhanced_mode and Path("request.review.md").exists():
@@ -777,7 +777,7 @@ def should_trigger_review(state: RalphState) -> bool:
     return False
 
 
-def handle_phase_failure(state: RalphState, failed_phase: str, error: str) -> RalphState:
+def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> RWLState:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     state.failed_phase = failed_phase
@@ -805,7 +805,7 @@ def handle_phase_failure(state: RalphState, failed_phase: str, error: str) -> Ra
     return state
 
 
-def check_for_completion(state: RalphState) -> bool:
+def check_for_completion(state: RWLState) -> bool:
     """Checks for a completed.md file."""
     try:
         with open("completed.md", "r") as f:
@@ -814,7 +814,7 @@ def check_for_completion(state: RalphState) -> bool:
         return False
 
 
-def run_final_review_cycle(state: RalphState) -> None:
+def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
     if not state.enhanced_mode:
         return
@@ -842,8 +842,8 @@ def run_final_review_cycle(state: RalphState) -> None:
     print("Final review cycle completed successfully!")
 
 
-def main_loop(state: RalphState) -> None:
-    """Main Ralph loop orchestrating all phases."""
+def main_loop(state: RWLState) -> None:
+    """Main RWL loop orchestrating all phases."""
     save_state_to_disk(state)
 
     while state.iteration < state.max_iterations and not state.is_complete:
@@ -898,7 +898,7 @@ def main_loop(state: RalphState) -> None:
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Enhanced Ralph Wiggum - AI Development Assistant",
+        description="Enhanced RWL - AI Development Assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -913,7 +913,7 @@ Examples:
     parser.add_argument(
         "prompt",
         nargs="?",
-        help="The task description for Ralph to work on"
+        help="The task description for RWL to work on"
     )
 
     parser.add_argument(
@@ -998,7 +998,7 @@ def main() -> int:
     setup_logging()
 
     # Initialize state
-    state = RalphState(
+    state = RWLState(
         enhanced_mode=args.enhanced,
         skip_tests=args.skip_tests,
         review_every=args.review_every,
@@ -1036,7 +1036,7 @@ def main() -> int:
         # Run main loop
         main_loop(state)
 
-        print("Ralph completed successfully!")
+        print("RWL completed successfully!")
 
         # Check if completed successfully (not by hitting max iterations)
         if state.is_complete and state.iteration < state.max_iterations:
