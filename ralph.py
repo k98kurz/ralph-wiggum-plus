@@ -248,50 +248,126 @@ def load_state_from_disk() -> RWLState | None:
         return None
 
 
+def generate_initial_plan(state: RWLState) -> str:
+    return f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
+
+    ORIGINAL PROMPT:
+    {state.original_prompt}
+
+    INSTRUCTIONS:
+    1. Analyze the task and break it down into concrete implementation steps
+    2. Create implementation_plan.md with prioritized tasks
+    3. Focus on a logical progression from foundation to completion
+
+    TASK PLANNING:
+    - Break the task into manageable sub-tasks
+    - Identify dependencies between tasks
+    - Prioritize tasks that enable subsequent work
+    - Consider testing, documentation, and polish tasks
+
+    PLAN FORMAT:
+    # Implementation Plan
+
+    ## Tasks
+
+    ### TASK_NAME
+
+    - Status: Pending
+    - Description: TASK_DESCRIPTION
+    - Acceptance Criteria:
+        - CRITERION_1
+        - CRITERION_2
+        - CRITERION_3
+
+    ## Dependencies
+    Note any task dependencies or prerequisites
+
+    OUTPUT: Create implementation_plan.md with your plan"""
+
+
+def generate_plan_review_prompt(state: RWLState) -> str:
+    return f"""You are RWL Plus AI coding assistant. Your
+    task is to review an implementation plan.
+
+    ORIGINAL PROMPT:
+    {state.original_prompt}
+
+    INSTRUCTIONS:
+    1. Read the plan written to implementation_plan.md.
+    2. Analyze the plan for consistency with the requirements of the original prompt.
+    3. Analyze the plan for coherence.
+    4. Analyze the plan for format: each task must have a Status, Description, and
+    Acceptance Criteria.
+    6. Note that the plan need not be exhaustively detailed. It needs only to have the
+    level of detail required to guide an implementer toward the ultimate goals of the
+    original prompt.
+    7. Focus on the 2-3 most glaring issues.
+    8. Provide constructive criticism.
+
+    OUTPUT: Create plan.review.md with your analysis. If the plan does not need any
+    updates, skip this step."""
+
+
+def generate_revise_plan_prompt(state: RWLState) -> str:
+    return f"""You are RWL Plus AI coding assistant. Your
+    task is to revise an implementation plan to incorporate and address the critique
+    from the reviewer.
+
+    ORIGINAL PROMPT:
+    {state.original_prompt}
+
+    INSTRUCTIONS:
+    1. Read the plan written to implementation_plan.md.
+    2. Read the analysis/critique provided in plan.review.md.
+    3. Consider carefully what parts of the analysis/critique are valid and which are not.
+    4. If there were any valid points to the analysis/critique, update implementation_plan.md
+    to address those concerns/incorporate that feedback.
+    5. Delete the review.plan.md file when you are done."""
+
+
 def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the meta-prompt for the BUILD phase."""
     return f"""You are RWL Plus, an AI development assistant working on iteration {state.iteration + 1}.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+    ORIGINAL PROMPT:
+    {state.original_prompt}
 
-PHASE: BUILD
-Your goal is to choose a task from the implementation_plan.md file and work toward completing it.
+    PHASE: BUILD
+    Your goal is to choose a task from the implementation_plan.md file and work toward completing it.
 
-CONTEXT:
-- Current iteration: {state.iteration + 1}
-- {'You must NOT run tests' if state.skip_tests else 'You should run tests to validate your work'}
+    CONTEXT:
+    - Current iteration: {state.iteration + 1}
+    - {'You must NOT run tests' if state.skip_tests else 'You should run tests to validate your work'}
 
-INSTRUCTIONS:
-1. Read the implementation_plan.md file to identify {'a task that has not been completed' if not active_task else 'the active task: ' + active_task}
-2. Implement the task following best practices
-3. Write what you learned, what you struggled with, and what remains to be done (if the task was not complete) in progress.md
-4. Stage your changes with 'git add'
-5. {'Create request.review.md when the task is complete' if state.enhanced_mode else 'Halt'}
+    INSTRUCTIONS:
+    1. Read the implementation_plan.md file to identify {'a task that has not been completed' if not active_task else 'the active task: ' + active_task}
+    2. Implement the task following best practices
+    3. Write what you learned, what you struggled with, and what remains to be done (if the task was not complete) in progress.md
+    4. Stage your changes with 'git add'
+    5. {'Create request.review.md when the task is complete' if state.enhanced_mode else 'Halt'}
 
-TASK SELECTION:
-- Choose the highest priority task from implementation_plan.md
-- Mark tasks you are working on as "In Progress"
-- Mark completed tasks as "In Review" in the implementation_plan.md file
-- Focus on one task at a time
+    TASK SELECTION:
+    - Choose the highest priority task from implementation_plan.md
+    - Mark tasks you are working on as "In Progress"
+    - Mark completed tasks as "In Review" in the implementation_plan.md file
+    - Focus on one task at a time
 
-PROGRESS TRACKING:
-- Update progress.md with: learnings, struggles, remaining work
-- If all tasks are marked as "Done" or "Complete" in implementation_plan.md, create completed.md with exactly: <promise>COMPLETE</promise>
+    PROGRESS TRACKING:
+    - Update progress.md with: learnings, struggles, remaining work
+    - If all tasks are marked as "Done" or "Complete" in implementation_plan.md, create completed.md with exactly: <promise>COMPLETE</promise>
 
-IMPORTANT: Focus on quality implementation and clear documentation."""
+    IMPORTANT: Focus on quality implementation and clear documentation."""
 
 
 def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the meta-prompt for the BUILD phase."""
     return f"""You are RWL Plus, an AI development assistant putting the finishing touches on the project.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+    ORIGINAL PROMPT:
+    {state.original_prompt}
 
-PHASE - FINAL BUILD:
-Your task is to read the review.final.md file for feedback on issues that need to be addressed, then work to address them.
-"""
+    PHASE - FINAL BUILD:
+    Your task is to read the review.final.md file for feedback on issues that need to be addressed, then work to address them."""
 
 
 def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> str:
@@ -299,165 +375,165 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
     if is_final_review:
         return f"""You are conducting a FINAL REVIEW of the completed implementation.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+        ORIGINAL PROMPT:
+        {state.original_prompt}
 
-PHASE - FINAL REVIEW:
-Your goal is to ensure the implementation is polished and ready for delivery.
+        PHASE - FINAL REVIEW:
+        Your goal is to ensure the implementation is polished and ready for delivery.
 
-INSTRUCTIONS:
-1. Review all implemented code for quality, consistency, completeness, and overall polish/professionalism
-2. Check for proper documentation, code style, and best practices
-3. Identify any remaining issues or improvements that are needed
-4. Create review.final.md with your findings
+        INSTRUCTIONS:
+        1. Review all implemented code for quality, consistency, completeness, and overall polish/professionalism
+        2. Check for proper documentation, code style, and best practices
+        3. Identify any remaining issues or improvements that are needed
+        4. Create review.final.md with your findings
 
-OUTPUT:
-- If everything is satisfactory: create review.final.md with the exact content PASSED
-- If improvements are needed: create review.final.md with specific action items"""
+        OUTPUT:
+        - If everything is satisfactory: create review.final.md with the exact content PASSED
+        - If improvements are needed: create review.final.md with specific action items"""
     else:
         return f"""You are reviewing the completion of a task in the development cycle.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+        ORIGINAL PROMPT:
+        {state.original_prompt}
 
-PHASE: REVIEW
-Your goal is to evaluate if the completed task meets quality standards.
+        PHASE: REVIEW
+        Your goal is to evaluate if the completed task meets quality standards.
 
-INSTRUCTIONS:
-1. Read request.review.md to understand what was completed
-2. Review the implementation changes (check git status, diff staged files)
-3. Evaluate against project requirements and best practices
-4. Create either review.passed.md OR review.rejected.md
+        INSTRUCTIONS:
+        1. Read request.review.md to understand what was completed
+        2. Review the implementation changes (check git status, diff staged files)
+        3. Evaluate against project requirements and best practices
+        4. Create either review.passed.md OR review.rejected.md
 
-REVIEW CRITERIA:
-- Task completion: Is the task fully implemented?
-- Code quality: Does it follow best practices?
-- Testing: Are appropriate tests included (unless --skip-tests)?
-- Documentation: Is the code properly documented?
+        REVIEW CRITERIA:
+        - Task completion: Is the task fully implemented?
+        - Code quality: Does it follow best practices?
+        - Testing: Are appropriate tests included (unless --skip-tests)?
+        - Documentation: Is the code properly documented?
 
-OUTPUT FORMAT:
-- If PASSED:
-    - Create review.passed.md with approval and any minor suggestions
-    - Update the status of any relevant tasks in the implementation_plan.md file from "In Review" to "Done"
-- If REJECTED:
-    - Create review.rejected.md with specific issues and action items
-    - Update the status of the rejected tasks in the implementation_plan.md file from "In Review" to "In Progress"
+        OUTPUT FORMAT:
+        - If PASSED:
+            - Create review.passed.md with approval and any minor suggestions
+            - Update the status of any relevant tasks in the implementation_plan.md file from "In Review" to "Done"
+        - If REJECTED:
+            - Create review.rejected.md with specific issues and action items
+            - Update the status of the rejected tasks in the implementation_plan.md file from "In Review" to "In Progress"
 
-CRITICAL: You must create exactly one of review.passed.md or review.rejected.md."""
+        CRITICAL: You must create exactly one of review.passed.md or review.rejected.md."""
 
 
 def generate_plan_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the PLAN phase."""
     return f"""You are planning the next development tasks.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+    ORIGINAL PROMPT:
+    {state.original_prompt}
 
-PHASE: PLAN
-Your goal is to update the implementation plan based on current progress and feedback.
+    PHASE: PLAN
+    Your goal is to update the implementation plan based on current progress and feedback.
 
-CONTEXT:
-- Current iteration: {state.iteration + 1}
-- Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
+    CONTEXT:
+    - Current iteration: {state.iteration + 1}
+    - Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
 
-INSTRUCTIONS:
-1. Read review.rejected.md if it exists (for feedback on rejected work)
-2. Read progress.md if it exists (for learnings and struggles)
-3. Read the current implementation_plan.md
-4. Update implementation_plan.md with prioritized tasks
+    INSTRUCTIONS:
+    1. Read review.rejected.md if it exists (for feedback on rejected work)
+    2. Read progress.md if it exists (for learnings and struggles)
+    3. Read the current implementation_plan.md
+    4. Update implementation_plan.md with prioritized tasks
 
-TASK PRIORITIZATION:
-- Address any issues from review.rejected.md first
-- Focus on remaining implementation work
-- Consider dependencies between tasks
-- Note any blockers
+    TASK PRIORITIZATION:
+    - Address any issues from review.rejected.md first
+    - Focus on remaining implementation work
+    - Consider dependencies between tasks
+    - Note any blockers
 
-PLAN FORMAT:
-# Implementation Plan
+    PLAN FORMAT:
+    # Implementation Plan
 
-## Tasks
+    ## Tasks
 
-### TASK_NAME
+    ### TASK_NAME
 
-- Status: Pending
-- Description: TASK_DESCRIPTION
-- Acceptance Criteria:
-    - CRITERION_1
-    - CRITERION_2
-    - CRITERION_3
+    - Status: Pending
+    - Description: TASK_DESCRIPTION
+    - Acceptance Criteria:
+        - CRITERION_1
+        - CRITERION_2
+        - CRITERION_3
 
-## Dependencies
-Note any task dependencies or prerequisites
+    ## Dependencies
+    Note any task dependencies or prerequisites
 
-OUTPUT: Update implementation_plan.md with the revised plan"""
+    OUTPUT: Update implementation_plan.md with the revised plan"""
 
 
 def generate_commit_prompt(state: RWLState) -> str:
     """Generate the meta-prompt for the COMMIT phase."""
     return f"""You are preparing to commit completed work.
 
-PHASE: COMMIT
-Your goal is to stage appropriate files and create a meaningful commit message.
+    PHASE: COMMIT
+    Your goal is to stage appropriate files and create a meaningful commit message.
 
-INSTRUCTIONS:
-1. Read review.passed.md for review feedback
-2. Check git status to see what files are staged/unstaged
-3. Stage additional files as needed for a complete commit
-4. Create a conventional commit message incorporating review feedback
+    INSTRUCTIONS:
+    1. Read review.passed.md for review feedback
+    2. Check git status to see what files are staged/unstaged
+    3. Stage additional files as needed for a complete commit
+    4. Create a conventional commit message incorporating review feedback
 
-STAGING STRATEGY:
-- Include all files related to the completed task
-- Exclude temporary files, logs, or intermediate artifacts
-- Ensure the commit tells a complete story
+    STAGING STRATEGY:
+    - Include all files related to the completed task
+    - Exclude temporary files, logs, or intermediate artifacts
+    - Ensure the commit tells a complete story
 
-COMMIT MESSAGE FORMAT:
-- Use conventional commit format: type(scope): description
-- Examples: feat(auth): add user authentication
-- Examples: fix(api): resolve null pointer exception
-- Examples: docs(readme): update installation instructions
-- Include review feedback insights in the message
+    COMMIT MESSAGE FORMAT:
+    - Use conventional commit format: type(scope): description
+    - Examples: feat(auth): add user authentication
+    - Examples: fix(api): resolve null pointer exception
+    - Examples: docs(readme): update installation instructions
+    - Include review feedback insights in the message
 
-ACTIONS:
-1. Stage additional files if needed: git add <files>
-2. Execute the commit with the generated message
-3. Commit locally only (pushing can be configured separately)"""
+    ACTIONS:
+    1. Stage additional files if needed: git add <files>
+    2. Execute the commit with the generated message
+    3. Commit locally only (pushing can be configured separately)"""
 
 
 def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> str:
     """Generate the meta-prompt for the RECOVERY phase."""
     return f"""You are diagnosing and recovering from a phase failure.
 
-ORIGINAL PROMPT:
-{state.original_prompt}
+    ORIGINAL PROMPT:
+    {state.original_prompt}
 
-PHASE: RECOVERY
-Failed Phase: {failed_phase}
-Error: {error}
+    PHASE: RECOVERY
+    Failed Phase: {failed_phase}
+    Error: {error}
 
-CONTEXT:
-- Current iteration: {state.iteration + 1}
-- Retry count: {state.retry_count}
-- Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
+    CONTEXT:
+    - Current iteration: {state.iteration + 1}
+    - Retry count: {state.retry_count}
+    - Enhanced mode: {'Yes' if state.enhanced_mode else 'No'}
 
-INSTRUCTIONS:
-1. Analyze what went wrong in the failed phase
-2. Review .ralph/state.json and .ralph/logs/ for diagnostic information
-3. Identify the root cause of the failure
-4. Create a recovery plan in .ralph/recovery.notes.md
+    INSTRUCTIONS:
+    1. Analyze what went wrong in the failed phase
+    2. Review .ralph/state.json and .ralph/logs/ for diagnostic information
+    3. Identify the root cause of the failure
+    4. Create a recovery plan in .ralph/recovery.notes.md
 
-DIAGNOSTIC STEPS:
-- Check for file system issues (permissions, disk space)
-- Verify git repository state
-- Look for configuration or environment problems
-- Check for timeout or network issues
+    DIAGNOSTIC STEPS:
+    - Check for file system issues (permissions, disk space)
+    - Verify git repository state
+    - Look for configuration or environment problems
+    - Check for timeout or network issues
 
-RECOVERY OUTPUT (.ralph/recovery.notes.md):
-- Root cause analysis
-- Specific steps to resolve the issue
-- Prevention measures for future iterations
-- Whether to retry the failed phase or continue with adjustments
+    RECOVERY OUTPUT (.ralph/recovery.notes.md):
+    - Root cause analysis
+    - Specific steps to resolve the issue
+    - Prevention measures for future iterations
+    - Whether to retry the failed phase or continue with adjustments
 
-GOAL: Provide actionable recovery guidance to get development back on track."""
+    GOAL: Provide actionable recovery guidance to get development back on track."""
 
 
 def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
@@ -497,78 +573,9 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
 
 def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
-    initial_plan_prompt = f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
-
-ORIGINAL PROMPT:
-{state.original_prompt}
-
-INSTRUCTIONS:
-1. Analyze the task and break it down into concrete implementation steps
-2. Create implementation_plan.md with prioritized tasks
-3. Focus on a logical progression from foundation to completion
-
-TASK PLANNING:
-- Break the task into manageable sub-tasks
-- Identify dependencies between tasks
-- Prioritize tasks that enable subsequent work
-- Consider testing, documentation, and polish tasks
-
-PLAN FORMAT:
-# Implementation Plan
-
-## Tasks
-
-### TASK_NAME
-
-- Status: Pending
-- Description: TASK_DESCRIPTION
-- Acceptance Criteria:
-    - CRITERION_1
-    - CRITERION_2
-    - CRITERION_3
-
-## Dependencies
-Note any task dependencies or prerequisites
-
-OUTPUT: Create implementation_plan.md with your plan"""
-
-    plan_review_prompt = f"""You are RWL Plus AI coding assistant. Your
-task is to review an implementation plan.
-
-ORIGINAL PROMPT:
-{state.original_prompt}
-
-INSTRUCTIONS:
-1. Read the plan written to implementation_plan.md.
-2. Analyze the plan for consistency with the requirements of the original prompt.
-3. Analyze the plan for coherence.
-4. Analyze the plan for format: each task must have a Status, Description, and
-Acceptance Criteria.
-6. Note that the plan need not be exhaustively detailed. It needs only to have the
-level of detail required to guide an implementer toward the ultimate goals of the
-original prompt.
-7. Focus on the 2-3 most glaring issues.
-8. Provide constructive criticism.
-
-OUTPUT: Create plan.review.md with your analysis. If the plan does not need any
-updates, skip this step.
-"""
-
-    revise_plan_prompt = f"""You are RWL Plus AI coding assistant. Your
-task is to revise an implementation plan to incorporate and address the critique
-from the reviewer.
-
-ORIGINAL PROMPT:
-{state.original_prompt}
-
-INSTRUCTIONS:
-1. Read the plan written to implementation_plan.md.
-2. Read the analysis/critique provided in plan.review.md.
-3. Consider carefully what parts of the analysis/critique are valid and which are not.
-4. If there were any valid points to the analysis/critique, update implementation_plan.md
-to address those concerns/incorporate that feedback.
-5. Delete the review.plan.md file when you are done.
-"""
+    initial_plan_prompt = generate_initial_plan_prompt(state)
+    plan_review_prompt = generate_plan_review_prompt(state)
+    revise_plan_prompt = generate_revise_plan_prompt(state)
 
     # Execute the plan generation
     success, result = call_opencode(
@@ -596,6 +603,7 @@ to address those concerns/incorporate that feedback.
             return False, total_result
 
     return True, total_result
+
 
 def execute_build_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the BUILD phase."""
@@ -895,26 +903,31 @@ def main_loop(state: RWLState) -> None:
 
         # Enhanced mode logic
         if state.enhanced_mode:
-            # Either follow a review process or fallback to PLAN phase
+            # Either follow a REVIEW -> (PLAN/COMMIT) process or fallback to PLAN phase
             if should_trigger_review(state):
                 review_success, review_result = execute_review_phase(state)
+                state.phase_history.append(f"REVIEW_{state.iteration}")
                 if review_success:
                     if Path("review.passed.md").exists():
                         commit_success, commit_result = execute_commit_phase(state)
+                        state.phase_history.append(f"COMMIT_{state.iteration}")
                         if not commit_success:
                             state = handle_phase_failure(state, Phase.COMMIT.value, commit_result)
                     elif Path("review.rejected.md").exists():
                         plan_success, plan_result = execute_plan_phase(state)
+                        state.phase_history.append(f"PLAN_{state.iteration}")
                         if not plan_success:
                             state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
             else:
                 plan_success, plan_result = execute_plan_phase(state)
+                state.phase_history.append(f"PLAN_{state.iteration}")
                 if not plan_success:
                     state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
 
         # Classic mode logic
         else:
             plan_success, plan_result = execute_plan_phase(state)
+            state.phase_history.append(f"PLAN_{state.iteration}")
             if not plan_success:
                 state = handle_phase_failure(state, Phase.PLAN.value, plan_result)
 
@@ -926,6 +939,7 @@ def main_loop(state: RWLState) -> None:
 
     # Check for final review condition
     if state.enhanced_mode and state.iteration < state.max_iterations and state.final_review_requested:
+        state.phase_history.append(f"FINAL_REVIEW_CYCLE_{state.iteration}")
         run_final_review_cycle(state)
 
     # Save final state
