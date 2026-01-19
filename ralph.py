@@ -25,7 +25,6 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional, Tuple, Union
 
 
 # Configuration Constants
@@ -68,11 +67,12 @@ class RalphState:
     is_complete: bool = field(default=False)
     mock_mode: bool = field(default=False)
     push_commits: bool = field(default=False)
+    original_prompt: str = field(default="")
 
 
 def setup_signal_handlers(state: RalphState) -> None:
     """Set up signal handlers for graceful shutdown."""
-    def signal_handler(signum: int, frame: Any) -> None:
+    def signal_handler(signum: int, frame) -> None:
         print(f"\nReceived signal {signum}, shutting down gracefully...")
         release_project_lock(state.lock_token)
         sys.exit(0)
@@ -248,12 +248,12 @@ def load_state_from_disk() -> RalphState | None:
         return None
 
 
-def generate_build_meta_prompt(state: RalphState, prompt_content: str, active_task: str|None = None) -> str:
+def generate_build_meta_prompt(state: RalphState, active_task: str|None = None) -> str:
     """Generate the meta-prompt for the BUILD phase."""
     meta_prompt = f"""You are Ralph Wiggum Plus, an AI development assistant working on iteration {state.iteration + 1}.
 
 ORIGINAL PROMPT:
-{prompt_content}
+{state.original_prompt}
 
 PHASE: BUILD
 Your goal is to choose a task from the implementation_plan.md file and work toward completing it.
@@ -288,6 +288,9 @@ def generate_review_meta_prompt(state: RalphState, is_final_review: bool = False
     """Generate the meta-prompt for the REVIEW phase."""
     if is_final_review:
         meta_prompt = f"""You are conducting a FINAL REVIEW of the completed implementation.
+
+ORIGINAL PROMPT:
+{state.original_prompt}
 
 PHASE: FINAL REVIEW
 Your goal is to ensure the implementation is polished and ready for delivery.
@@ -338,6 +341,9 @@ CRITICAL: You must create exactly one of these files."""
 def generate_plan_meta_prompt(state: RalphState) -> str:
     """Generate the meta-prompt for the PLAN phase."""
     meta_prompt = f"""You are planning the next development tasks.
+
+ORIGINAL PROMPT:
+{state.original_prompt}
 
 PHASE: PLAN
 Your goal is to update the implementation plan based on current progress and feedback.
@@ -406,6 +412,9 @@ def generate_recovery_meta_prompt(state: RalphState, failed_phase: str, error: s
     """Generate the meta-prompt for the RECOVERY phase."""
     meta_prompt = f"""You are diagnosing and recovering from a phase failure.
 
+ORIGINAL PROMPT:
+{state.original_prompt}
+
 PHASE: RECOVERY
 Failed Phase: {failed_phase}
 Error: {error}
@@ -438,7 +447,7 @@ GOAL: Provide actionable recovery guidance to get development back on track."""
     return meta_prompt
 
 
-def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> Tuple[bool, str]:
+def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
     """Call OpenCode with the given prompt and return success status and output."""
     if mock_mode:
         # Mock mode for testing
@@ -473,12 +482,12 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
         return False, error_msg
 
 
-def generate_initial_plan(state: RalphState, prompt_content: str) -> Tuple[bool, str]:
+def generate_initial_plan(state: RalphState) -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
     initial_plan_prompt = f"""You are the Ralph Wiggum Plus AI coding assistant creating an initial implementation plan.
 
 ORIGINAL PROMPT:
-{prompt_content}
+{state.original_prompt}
 
 INSTRUCTIONS:
 1. Analyze the task and break it down into concrete implementation steps
@@ -511,8 +520,9 @@ Note any task dependencies or prerequisites
 OUTPUT: Create implementation_plan.md with your plan"""
     plan_review_prompt = f"""You are Ralph Wiggum Plus AI coding assistant. Your
 task is to review an implementation plan.
-ORIGINAL PROMPT
-{prompt_content}
+
+ORIGINAL PROMPT:
+{state.original_prompt}
 
 INSTRUCTIONS:
 1. Read the plan written to implementation_plan.md.
@@ -535,7 +545,7 @@ task is to revise an implementation plan to incorporate and address the critique
 from the reviewer.
 
 ORIGINAL PROMPT:
-{prompt_content}
+{state.original_prompt}
 
 INSTRUCTIONS:
 1. Read the plan written to implementation_plan.md.
@@ -573,19 +583,13 @@ to address those concerns/incorporate that feedback.
 
     return True, total_result
 
-def execute_build_phase(state: RalphState) -> Tuple[bool, str]:
+def execute_build_phase(state: RalphState) -> tuple[bool, str]:
     """Execute the BUILD phase."""
-    print(f"Starting BUILD phase (iteration {state.iteration + 1})")
+    print(f"Starting BUILD phase")
 
     try:
-        # Read the prompt and implementation plan
-        prompt_content = ""
-        if Path("prompt.md").exists():
-            with open("prompt.md", "r") as f:
-                prompt_content = f.read().strip()
-
         # Generate build meta-prompt
-        meta_prompt = generate_build_meta_prompt(state, prompt_content)
+        meta_prompt = generate_build_meta_prompt(state)
 
         # Execute via OpenCode
         success, result = call_opencode(meta_prompt, state.model, mock_mode=state.mock_mode)
@@ -602,7 +606,7 @@ def execute_build_phase(state: RalphState) -> Tuple[bool, str]:
         return False, error_msg
 
 
-def execute_review_phase(state: RalphState, is_final_review: bool = False) -> Tuple[bool, str]:
+def execute_review_phase(state: RalphState, is_final_review: bool = False) -> tuple[bool, str]:
     """Execute the REVIEW phase."""
     print("Starting REVIEW phase")
 
@@ -611,8 +615,8 @@ def execute_review_phase(state: RalphState, is_final_review: bool = False) -> Tu
         if not is_final_review and state.enhanced_mode:
             request_file = Path("request.review.md")
             if not request_file.exists():
-                print(f"Waiting {RECOVERY_WAIT_SECONDS} seconds for request.review.md...")
-                time.sleep(RECOVERY_WAIT_SECONDS)
+                print(f"Waiting {RETRY_WAIT_SECONDS} seconds for request.review.md...")
+                time.sleep(RETRY_WAIT_SECONDS)
                 if not request_file.exists():
                     return False, "request.review.md file not found"
 
@@ -655,7 +659,7 @@ def execute_review_phase(state: RalphState, is_final_review: bool = False) -> Tu
         return False, error_msg
 
 
-def execute_plan_phase(state: RalphState) -> Tuple[bool, str]:
+def execute_plan_phase(state: RalphState) -> tuple[bool, str]:
     """Execute the PLAN phase."""
     print("Starting PLAN phase")
 
@@ -694,7 +698,7 @@ def execute_plan_phase(state: RalphState) -> Tuple[bool, str]:
         return False, error_msg
 
 
-def execute_commit_phase(state: RalphState) -> Tuple[bool, str]:
+def execute_commit_phase(state: RalphState) -> tuple[bool, str]:
     """Execute the COMMIT phase."""
     print("Starting COMMIT phase")
 
@@ -729,7 +733,7 @@ def execute_commit_phase(state: RalphState) -> Tuple[bool, str]:
         return False, error_msg
 
 
-def execute_recovery_phase(state: RalphState, failed_phase: str, error: str) -> Tuple[bool, str]:
+def execute_recovery_phase(state: RalphState, failed_phase: str, error: str) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
     print(f"Starting RECOVERY phase for {failed_phase}")
 
@@ -755,7 +759,7 @@ def execute_recovery_phase(state: RalphState, failed_phase: str, error: str) -> 
         return False, error_msg
 
 
-def execute_final_review_phase(state: RalphState) -> Tuple[bool, str]:
+def execute_final_review_phase(state: RalphState) -> tuple[bool, str]:
     """Execute the final REVIEW phase."""
     return execute_review_phase(state, is_final_review=True)
 
@@ -1005,6 +1009,7 @@ def main() -> int:
         mock_mode=args.mock_mode,
         start_time=time.time(),
         push_commits=args.push_commits,
+        original_prompt=prompt_content,
     )
 
     # Set up signal handlers
@@ -1023,7 +1028,7 @@ def main() -> int:
         # Check if implementation plan exists, create if needed
         if not Path("implementation_plan.md").exists():
             print("No implementation plan found, generating...")
-            success, result = generate_initial_plan(state, prompt_content)
+            success, result = generate_initial_plan(state)
             if not success:
                 print(f"ERROR: Failed to generate initial plan: {result}")
                 return 1
