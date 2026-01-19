@@ -36,6 +36,7 @@ DEFAULT_REVIEW_EVERY = 0
 PHASE_RETRY_LIMIT = 3
 RETRY_WAIT_SECONDS = 30
 RECOVERY_WAIT_SECONDS = 10
+STALE_LOCK_TIMEOUT = 1200 # 20 minutes
 
 
 class Phase(Enum):
@@ -115,7 +116,7 @@ def get_project_lock() -> str | None:
 
             # Check if lock is stale (older than 1 hour)
             created_time = lock_data.get("created", 0)
-            if time.time() - created_time < 3600:  # 1 hour
+            if time.time() - created_time < STALE_LOCK_TIMEOUT:  # 1 hour
                 print("ERROR: Project is locked by another RWL instance")
                 return None
             else:
@@ -236,18 +237,24 @@ def load_state_from_disk() -> RWLState | None:
         with open(state_file, "r") as f:
             state_dict = json.load(f)
 
-        # Convert dictionary back to RWLState
+        if not state_dict.get("original_prompt"):
+            print("ERROR: Saved state has no original prompt. Cannot resume.")
+            return None
+
         return RWLState(**state_dict)
-    except Exception as e:
-        print(f"WARNING: Error loading state: {e}")
+    except (json.JSONDecodeError, TypeError, KeyError) as e:
+        print(f"ERROR: Corrupted state file: {e}")
         return None
 
 
-def generate_initial_plan_prompt(state: RWLState) -> str:
+def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
+    """Generate the initial implementation plan prompt with optional CLI prompt prepended."""
+    combined = f"{cli_prompt}\n{state.original_prompt}".strip()
+
     return f"""You are the RWL Plus AI coding assistant creating an initial implementation plan.
 
-    ORIGINAL PROMPT:
-    {state.original_prompt}
+    TASK:
+    {combined}
 
     INSTRUCTIONS:
     1. Analyze the task and break it down into concrete implementation steps
@@ -566,13 +573,9 @@ def call_opencode(prompt: str, model: str, timeout: int = OPENCODE_TIMEOUT, mock
         return False, error_msg
 
 
-def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
+def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
-    # First check the lock
-    if not check_project_lock(state.lock_token):
-        raise Error('lost the lock; aborting loop')
-
-    initial_plan_prompt = generate_initial_plan_prompt(state)
+    initial_plan_prompt = generate_initial_plan_prompt(state, cli_prompt)
     plan_review_prompt = generate_plan_review_prompt(state)
     revise_plan_prompt = generate_revise_plan_prompt(state)
 
@@ -983,6 +986,8 @@ Examples:
   %(prog)s --enhanced --final-review "Complex multi-module project"
   %(prog)s --review-every 3 "Regular review cycles"
   %(prog)s --mock-mode "Test without external dependencies"
+  %(prog)s --resume "Resume interrupted session"
+  %(prog)s --force-resume "Force resume with stale lock"
         """
     )
 
@@ -1048,6 +1053,18 @@ Examples:
         help="Use mock mode for testing (no external AI calls)"
     )
 
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from a previous session using saved state in .ralph/state.json"
+    )
+
+    parser.add_argument(
+        "--force-resume",
+        action="store_true",
+        help="Force resume by removing any existing lock file (bypasses staleness check)"
+    )
+
     return parser.parse_args()
 
 
@@ -1055,13 +1072,54 @@ def main() -> int:
     """Main entry point."""
     args = parse_arguments()
 
+    # Validate environment
+    validate_environment()
+    setup_logging()
+
+    # Handle resume mode
+    if args.resume or args.force_resume:
+        loaded_state = load_state_from_disk()
+        if not loaded_state:
+            print("ERROR: Could not load state. Run without --resume first.")
+            return 1
+
+        lock_file = Path("ralph.lock.json")
+        if lock_file.exists():
+            if args.force_resume:
+                print("WARNING: Removing existing lock file (--force-resume)")
+                lock_file.unlink()
+            else:
+                with open(lock_file, "r") as f:
+                    lock_data = json.load(f)
+                created_time = lock_data.get("created", 0)
+                if time.time() - created_time < STALE_LOCK_TIMEOUT:
+                    print("ERROR: Lock file is not stale - another RWL process may be running. "
+                          "Use --force-resume to override, or wait for the other process to release the lock.")
+                    return 1
+                else:
+                    print("WARNING: Removing stale lock file")
+                    lock_file.unlink()
+
+        print(f"Resuming from iteration {loaded_state.iteration}")
+        print(f"Last phase: {loaded_state.current_phase}")
+        if loaded_state.last_error:
+            print(f"Last error: {loaded_state.last_error}")
+        print()
+
+        state = loaded_state
+        state.lock_token = None
+        state.start_time = time.time()
+    else:
+        state = None
+
     # Validate prompt
     prompt_content = ""
     if args.prompt:
         prompt_content = args.prompt
-        # Save prompt to prompt.md
         with open("prompt.md", "w") as f:
             f.write(prompt_content)
+    elif state and state.original_prompt:
+        prompt_content = state.original_prompt
     elif Path("prompt.md").exists():
         with open("prompt.md", "r") as f:
             prompt_content = f.read().strip()
@@ -1069,24 +1127,21 @@ def main() -> int:
         print("ERROR: No prompt provided and no prompt.md file found")
         return 1
 
-    # Validate environment
-    validate_environment()
-    setup_logging()
-
-    # Initialize state
-    state = RWLState(
-        enhanced_mode=args.enhanced,
-        skip_tests=args.skip_tests,
-        review_every=args.review_every,
-        model=args.model,
-        review_model=args.review_model,
-        max_iterations=args.max_iterations,
-        final_review_requested=args.final_review,
-        mock_mode=args.mock_mode,
-        start_time=time.time(),
-        push_commits=args.push_commits,
-        original_prompt=prompt_content,
-    )
+    # Initialize state if not resuming
+    if not state:
+        state = RWLState(
+            enhanced_mode=args.enhanced,
+            skip_tests=args.skip_tests,
+            review_every=args.review_every,
+            model=args.model,
+            review_model=args.review_model,
+            max_iterations=args.max_iterations,
+            final_review_requested=args.final_review,
+            mock_mode=args.mock_mode,
+            start_time=time.time(),
+            push_commits=args.push_commits,
+            original_prompt=prompt_content,
+        )
 
     # Set up signal handlers
     setup_signal_handlers(state)
@@ -1104,7 +1159,8 @@ def main() -> int:
         # Check if implementation plan exists, create if needed
         if not Path("implementation_plan.md").exists():
             print("No implementation plan found, generating...")
-            success, result = generate_initial_plan(state)
+            cli_prompt = args.prompt if args.prompt else ""
+            success, result = generate_initial_plan(state, cli_prompt)
             if not success:
                 print(f"ERROR: Failed to generate initial plan: {result}")
                 return 1
