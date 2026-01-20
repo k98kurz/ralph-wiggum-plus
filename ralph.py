@@ -29,6 +29,10 @@ from enum import Enum
 from pathlib import Path
 
 
+# semver string
+VERSION = "0.0.3"
+
+
 # Configuration Constants
 DEFAULT_MODEL = "opencode/big-pickle"
 DEFAULT_REVIEW_MODEL = "opencode/big-pickle"
@@ -981,7 +985,7 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> tupl
 
     # Reset retry count and start recovery loop
     state.retry_count = 0
-    recovery_success = False
+    recovery_success, recovery_result = False, None
 
     # Enhanced mode: try recovery and retry until limit reached
     while state.enhanced_mode and state.retry_count < PHASE_RETRY_LIMIT:
@@ -1130,6 +1134,12 @@ Examples:
   %(prog)s --resume "Resume interrupted session"
   %(prog)s --force-resume "Force resume with stale lock"
         """
+    )
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {VERSION}"
     )
 
     parser.add_argument(
