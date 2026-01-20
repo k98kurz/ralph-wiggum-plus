@@ -32,6 +32,7 @@ usage: ralph.py [-h] [--max-iterations MAX_ITERATIONS] [--skip-tests]
                 [--review-every REVIEW_EVERY] [--enhanced] [--final-review]
                 [--model MODEL] [--review-model REVIEW_MODEL] [--push-commits]
                 [--mock-mode] [--resume] [--force-resume]
+                [--reorganize-archive]
                 [prompt]
 
 Enhanced RWL - AI Development Assistant
@@ -63,6 +64,8 @@ options:
                         .ralph/state.json
   --force-resume        Force resume by removing any existing lock file
                         (bypasses staleness check)
+  --reorganize-archive  Reorganize archives into per-session directories in
+                        .ralph/archive/
 
 Examples:
   ralph.py "Build a web scraper for news articles"
@@ -72,6 +75,7 @@ Examples:
   ralph.py --mock-mode "Test without external dependencies"
   ralph.py --resume "Resume interrupted session"
   ralph.py --force-resume "Force resume with stale lock"
+  ralph.py --reorganize-archive # Reorganize archive files into session directories
 ```
 
 ## Development Loops

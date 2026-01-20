@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import signal
 import subprocess
@@ -30,7 +31,7 @@ from pathlib import Path
 
 
 # semver string
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 
 # Configuration Constants
@@ -98,6 +99,20 @@ def setup_logging() -> None:
 # Global state for archiving
 ARCHIVED_HASHES: set[str] = set()
 
+ARCHIVE_FILENAMES = [
+    "request.review.md",
+    "review.passed.md",
+    "review.rejected.md",
+    "review.final.md",
+    "plan.review.md",
+    "implementation_plan.md",
+    "progress.md",
+    "recovery.notes.md",
+    "completed.md",
+]
+
+ARCHIVE_FILE_FORMAT = re.compile(r"^(\d+)\.([a-f0-9]{32})\.(.+)$")
+
 
 def populate_archived_hashes(lock_token: str) -> None:
     """Populate the in-memory hash set from existing archives for this token."""
@@ -105,7 +120,7 @@ def populate_archived_hashes(lock_token: str) -> None:
     if not archive_dir.exists():
         return
 
-    for archive_file in archive_dir.glob(f"{lock_token}.*"):
+    for archive_file in archive_dir.glob(f"*.{lock_token}.*"):
         try:
             content = archive_file.read_bytes()
             file_hash = hashlib.sha256(content).hexdigest()
@@ -130,7 +145,7 @@ def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
         archive_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = int(time.time())
-        archive_name = f"{lock_token}.{timestamp}.{file_path.name}"
+        archive_name = f"{timestamp}.{lock_token}.{file_path.name}"
         archive_path = archive_dir / archive_name
 
         shutil.copy2(file_path, archive_path)
@@ -142,19 +157,63 @@ def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
 
 def archive_any_process_files(lock_token: str) -> None:
     """Check for and archive any intermediate files."""
-    files_to_archive = [
-        "request.review.md",
-        "review.passed.md",
-        "review.rejected.md",
-        "review.final.md",
-        "plan.review.md",
-        "implementation_plan.md",
-        "progress.md",
-        ".ralph/recovery.notes.md",
-        "completed.md",
-    ]
-    for file_name in files_to_archive:
+    for file_name in ARCHIVE_FILENAMES:
         archive_intermediate_file(Path(file_name), lock_token)
+
+
+def reorganize_archive_files(lock_token: str | None) -> None:
+    """Reorganize archives into per-session directories.
+
+    Skips files matching the current lock token to allow active sessions to continue.
+    Only reorganizes sessions with 2 or more files.
+    """
+    archive_dir = Path(".ralph/archive")
+    if not archive_dir.exists():
+        return
+
+    current_token = lock_token
+
+    token_files: dict[str, list[Path]] = {}
+
+    for archive_file in archive_dir.iterdir():
+        if not archive_file.is_file():
+            continue
+
+        match = ARCHIVE_FILE_FORMAT.match(archive_file.name)
+        if match:
+            timestamp_str, token, original_name = match.groups()
+            if current_token and token == current_token:
+                continue
+            if token not in token_files:
+                token_files[token] = []
+            token_files[token].append(archive_file)
+
+    for token, files in token_files.items():
+        if len(files) < 2:
+            continue
+
+        session_dir = archive_dir / token
+        if session_dir.exists():
+            suffix = 1
+            while (archive_dir / f"{token}_{suffix}").exists():
+                suffix += 1
+            session_dir = archive_dir / f"{token}_{suffix}"
+
+        session_dir.mkdir(exist_ok=True)
+
+        for src_file in files:
+            dst_file = session_dir / src_file.name
+            try:
+                result = subprocess.run(
+                    ["git", "mv", str(src_file), str(dst_file)],
+                    capture_output=True,
+                    cwd=Path.cwd()
+                )
+                if result.returncode != 0:
+                    raise Exception(result.stderr.decode().strip())
+            except Exception:
+                shutil.copy2(src_file, dst_file)
+                src_file.unlink()
 
 
 def validate_environment() -> None:
@@ -269,7 +328,7 @@ def cleanup_process_files(lock_token: str) -> None:
         "review.passed.md",
         "review.final.md",
         "progress.md",
-        ".ralph/recovery.notes.md"
+        "recovery.notes.md"
     ]
 
     for file_path in files_to_remove:
@@ -441,7 +500,7 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     create completed.md with exactly: <promise>COMPLETE</promise>
     IMPORTANT: """ + (
         'The previous attempt to run this phase failed. Read \
-        .ralph/recovery.notes.md for recovery information.'
+        recovery.notes.md for recovery information.'
         if state.phase_recovered else
         'Focus on quality implementation and clear documentation.'
     )
@@ -524,7 +583,7 @@ def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> st
     if state.phase_recovered:
         return prompt + """
 
-        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+        The previous attempt to run this phase failed. Read recovery.notes.md for recovery information."""
     else:
         return prompt
 
@@ -578,7 +637,7 @@ def generate_plan_prompt(state: RWLState) -> str:
     if state.phase_recovered:
         return prompt + """
 
-        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+        The previous attempt to run this phase failed. Read recovery.notes.md for recovery information."""
     else:
         return prompt
 
@@ -616,7 +675,7 @@ def generate_commit_prompt(state: RWLState) -> str:
     if state.phase_recovered:
         return prompt + """
 
-        The previous attempt to run this phase failed. Read .ralph/recovery.notes.md for recovery information."""
+        The previous attempt to run this phase failed. Read recovery.notes.md for recovery information."""
     else:
         return prompt
 
@@ -642,7 +701,7 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
     1. Analyze what went wrong in the failed phase
     2. Review .ralph/state.json and .ralph/logs/ for diagnostic information
     3. Identify the root cause of the failure
-    4. Create a recovery plan in .ralph/recovery.notes.md
+    4. Create a recovery plan in recovery.notes.md
 
     DIAGNOSTIC STEPS:
     - Check for file system issues (permissions, disk space)
@@ -650,7 +709,7 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
     - Look for configuration or environment problems
     - Check for timeout or network issues
 
-    RECOVERY OUTPUT (.ralph/recovery.notes.md):
+    RECOVERY OUTPUT (recovery.notes.md):
     - Root cause analysis
     - If it was a timeout:
         - Provide guidance for continuing where the previous phase left off
@@ -1216,6 +1275,12 @@ Examples:
         help="Force resume by removing any existing lock file (bypasses staleness check)"
     )
 
+    parser.add_argument(
+        "--reorganize-archive",
+        action="store_true",
+        help="Reorganize archives into per-session directories in .ralph/archive/"
+    )
+
     return parser.parse_args()
 
 
@@ -1226,6 +1291,20 @@ def main() -> int:
     # Validate environment
     validate_environment()
     setup_logging()
+
+    # Handle archive reorganization
+    if args.reorganize_archive:
+        lock_token = None
+        lock_file = Path("ralph.lock.json")
+        if lock_file.exists():
+            try:
+                with open(lock_file, "r") as f:
+                    lock_data = json.load(f)
+                lock_token = lock_data.get("lock_token")
+            except Exception:
+                pass
+        reorganize_archive_files(lock_token)
+        return 0
 
     # Handle resume mode
     if args.resume or args.force_resume:
