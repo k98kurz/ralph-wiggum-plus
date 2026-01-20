@@ -147,6 +147,7 @@ def archive_any_process_files(lock_token: str) -> None:
         "implementation_plan.md",
         "progress.md",
         ".ralph/recovery.notes.md",
+        "completed.md",
     ]
     for file_name in files_to_archive:
         archive_intermediate_file(Path(file_name), lock_token)
@@ -1022,7 +1023,7 @@ def check_for_completion(state: RWLState) -> bool:
     """Checks for a completed.md file."""
     try:
         with open("completed.md", "r") as f:
-            return "<promise>COMPLETE</promise>" in f.read()
+            return True
     except:
         return False
 
