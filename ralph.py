@@ -498,11 +498,13 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     - Update progress.md with: learnings, struggles, remaining work
     - If all tasks are marked as "Done" or "Complete" in implementation_plan.md,
     create completed.md with exactly: <promise>COMPLETE</promise>
-    IMPORTANT: """ + (
-        'The previous attempt to run this phase failed. Read \
+
+    IMPORTANT:
+    Focus on precise implementation and accurate, concise documentation.""" + (
+        '\nThe previous attempt to run this phase failed. Read \
         recovery.notes.md for recovery information.'
         if state.phase_recovered else
-        'Focus on quality implementation and clear documentation.'
+        ''
     )
 
 
