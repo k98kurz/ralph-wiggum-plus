@@ -216,6 +216,68 @@ def reorganize_archive_files(lock_token: str | None) -> None:
                 src_file.unlink()
 
 
+# Global cache for prompt templates
+PROMPT_TEMPLATES = {}
+
+def get_template(template_name: str, state: RWLState, default: str) -> str:
+    if template_name in PROMPT_TEMPLATES:
+        template = PROMPT_TEMPLATES[template_name]
+        return template if not state.phase_recovered else (template + get_recovery_template())
+
+    template_dir = Path('.ralph/templates')
+    file_path = template_dir / f'{template_name}.md'
+    os.makedirs(template_dir, exist_ok=True)
+
+    if not file_path.exists():
+        with open(file_path, 'w') as f:
+            f.write(default)
+    with open(file_path, 'r') as f:
+        template = f.read()
+        PROMPT_TEMPLATES[template_name] = template
+    return template if not state.phase_recovered else (template + get_recovery_template())
+
+def get_recovery_template() -> str:
+    if 'recovery' in PROMPT_TEMPLATES:
+        return PROMPT_TEMPLATES['recovery']
+
+    template_dir = Path('.ralph/templates')
+    file_path = template_dir / 'phase_recovery.md'
+    os.makedirs(template_dir, exist_ok=True)
+
+    if not file_path.exists():
+        with open(file_path, 'w') as f:
+            f.write('\nThe previous attempt to run this phase failed. Read ' +
+                ' recovery.notes.md for recovery information.')
+    with open(file_path, 'r') as f:
+        template = f.read()
+        PROMPT_TEMPLATES['recovery'] = template
+    return template
+
+def interpolate_template(template: str, state: RWLState, **kwargs) -> str:
+    variables = {
+        'iteration': state.iteration,
+        'current_phase': state.current_phase,
+        'failed_phase': state.failed_phase,
+        'retry_count': state.retry_count,
+        'max_iterations': state.max_iterations,
+        'enhanced_mode': state.enhanced_mode,
+        'skip_tests': state.skip_tests,
+        'review_every': state.review_every,
+        'model': state.model,
+        'review_model': state.review_model,
+        'lock_token': state.lock_token,
+        'start_time': state.start_time,
+        'last_error': state.last_error,
+        'final_review_requested': state.final_review_requested,
+        'is_complete': state.is_complete,
+        'mock_mode': state.mock_mode,
+        'original_prompt': state.original_prompt,
+        'phase_recovered': state.phase_recovered,
+    }
+    for key, val in variables.items():
+        template = template.replace(f'{{{key}}}', str(val))
+    return template
+
 def validate_environment() -> None:
     """Validate the environment before starting."""
     # Check if we're in a git repository
@@ -376,9 +438,9 @@ def load_state_from_disk() -> RWLState | None:
         return None
 
 
-def generate_initial_plan_prompt(state: RWLState, cli_prompt: str = "") -> str:
+def generate_initial_plan_prompt(state: RWLState) -> str:
     """Generate the initial implementation plan prompt with optional CLI prompt prepended."""
-    combined = f"{cli_prompt}\n{state.original_prompt}".strip()
+    combined = f"{state.original_prompt}".strip()
 
     return f"""You are creating an initial implementation plan.
 
@@ -510,15 +572,16 @@ def generate_build_prompt(state: RWLState, active_task: str|None = None) -> str:
 
 def generate_final_build_prompt(state: RWLState, active_task: str|None = None) -> str:
     """Generate the prompt for the BUILD phase."""
-    return f"""You are putting the finishing touches on the project.
+    template = get_template('final_build', state,
+        """You are putting the finishing touches on the project.
 
     ORIGINAL PROMPT:
-    {state.original_prompt}
+    {original_prompt}
 
     PHASE - FINAL BUILD:
     Your task is to read the review.final.md file for feedback on issues that need
-    to be addressed, then work to address them."""
-
+    to be addressed, then work to address them.""")
+    return interpolate_template(template, state, active_task=active_task)
 
 def generate_review_prompt(state: RWLState, is_final_review: bool = False) -> str:
     """Generate the prompt for the REVIEW phase."""
@@ -761,9 +824,9 @@ def call_opencode(prompt: str, model: str, lock_token: str, timeout: int = OPENC
         return False, error_msg
 
 
-def generate_initial_plan(state: RWLState, cli_prompt: str = "") -> tuple[bool, str]:
+def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
     """Generate the initial implementation plan when none exists."""
-    initial_plan_prompt = generate_initial_plan_prompt(state, cli_prompt)
+    initial_plan_prompt = generate_initial_plan_prompt(state)
     plan_review_prompt = generate_plan_review_prompt(state)
     revise_plan_prompt = generate_revise_plan_prompt(state)
 
@@ -1350,8 +1413,8 @@ def main() -> int:
     prompt_content = ""
     if args.prompt:
         prompt_content = args.prompt
-        with open("prompt.md", "w") as f:
-            f.write(prompt_content)
+        with open("prompt.md", "a") as f:
+            f.write(f"\n{prompt_content}")
     elif state and state.original_prompt:
         prompt_content = state.original_prompt
     elif Path("prompt.md").exists():
@@ -1393,8 +1456,7 @@ def main() -> int:
         # Check if implementation plan exists, create if needed
         if not Path("implementation_plan.md").exists():
             print("No implementation plan found, generating...")
-            cli_prompt = args.prompt if args.prompt else ""
-            success, result = generate_initial_plan(state, cli_prompt)
+            success, result = generate_initial_plan(state)
             if not success:
                 print(f"ERROR: Failed to generate initial plan: {result}")
                 return 1
