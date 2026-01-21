@@ -25,10 +25,10 @@ welcome). Use at your own risk.
 ## Usage
 
 Ralph is a single-file Python script. You can drop it anywhere in your `$PATH`
-(e.g., `~/.local/bin/ralph`) and run it directly from your project root.
+(e.g., `~/.local/bin/ralph.py`) and run it directly from your project root.
 
 ```text
-usage: ralph.py [-h] [--max-iterations MAX_ITERATIONS] [--skip-tests]
+usage: ralph.py [-h] [--max-iterations MAX_ITERATIONS] [--test-instructions TEST_INSTRUCTIONS]
                 [--review-every REVIEW_EVERY] [--enhanced] [--final-review]
                 [--model MODEL] [--review-model REVIEW_MODEL] [--push-commits]
                 [--mock-mode] [--resume] [--force-resume]
@@ -77,6 +77,29 @@ Examples:
   ralph.py --force-resume "Force resume with stale lock"
   ralph.py --reorganize-archive # Reorganize archive files into session directories
 ```
+
+## Configuration
+
+Ralph uses customizable prompt templates stored in `.ralph/templates/`. On first run, templates
+are created with sensible defaults. You can edit these files to customize the AI's behavior
+for each phase without modifying the script.
+
+Templates use `$variable` syntax (e.g., `$original_prompt`, `$iteration`) for state
+interpolation. All templates are validated on startup; invalid variables or syntax errors are
+reported before the main loop begins.
+
+Available templates:
+- `initial_plan.md` - Initial implementation plan generation
+- `plan_review.md` - Plan review and critique
+- `revise_plan.md` - Plan revision based on feedback
+- `build.md` - Build phase prompt
+- `final_build.md` - Final build/polish phase
+- `review.md` - Code review phase
+- `final_review.md` - Final quality review
+- `plan.md` - Planning phase
+- `commit.md` - Commit message generation
+- `recovery.md` - Recovery from phase failures
+- `phase_recovery.md` - Appended to templates when retrying after recovery
 
 ## Development Loops
 
