@@ -745,7 +745,7 @@ def generate_commit_prompt(state: RWLState) -> str:
         return prompt
 
 
-def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> str:
+def generate_recovery_prompt(state: RWLState) -> str:
     """Generate the prompt for the RECOVERY phase."""
     return f"""You are diagnosing and recovering from a phase failure.
 
@@ -753,8 +753,8 @@ def generate_recovery_prompt(state: RWLState, failed_phase: str, error: str) -> 
     {state.original_prompt}
 
     PHASE: RECOVERY
-    Failed Phase: {failed_phase}
-    Error: {error}
+    Failed Phase: {state.failed_phase}
+    Error: {state.last_error}
 
     CONTEXT:
     - Current iteration: {state.iteration}
@@ -1029,20 +1029,20 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
         return False, error_msg
 
 
-def execute_recovery_phase(state: RWLState, failed_phase: str, error: str) -> tuple[bool, str]:
+def execute_recovery_phase(state: RWLState) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
         raise Exception('lost the lock; aborting loop')
 
-    print(f"Starting RECOVERY phase for {failed_phase}")
+    print(f"Starting RECOVERY phase for {state.failed_phase}")
 
     try:
         # Wait briefly for transient issues to resolve
         time.sleep(RECOVERY_WAIT_SECONDS)
 
         # Generate recovery prompt
-        prompt = generate_recovery_prompt(state, failed_phase, error)
+        prompt = generate_recovery_prompt(state)
 
         # Execute via OpenCode
         success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
@@ -1118,7 +1118,7 @@ def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> tupl
 
         if not recovery_success:
             print(f"Attempting RECOVERY phase for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
-            recovery_success, recovery_result = execute_recovery_phase(state, failed_phase, error)
+            recovery_success, recovery_result = execute_recovery_phase(state)
 
         if recovery_success:
             # Set phase_recovered flag for prompt generation
