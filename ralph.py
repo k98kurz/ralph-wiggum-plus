@@ -32,11 +32,11 @@ from string import Template
 
 
 # semver string
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 
 
 # Configuration Constants
-DEFAULT_MODEL = "opencode/big-pickle"
+DEFAULT_MODEL = "opencode/minimax-m2.1-free"
 DEFAULT_REVIEW_MODEL = "opencode/big-pickle"
 OPENCODE_TIMEOUT = 1200 # 20 minutes
 DEFAULT_MAX_ITERATIONS = 20
