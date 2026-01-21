@@ -119,12 +119,12 @@ ARCHIVE_FILENAMES = [
     REQUEST_REVIEW_FILE,
     REVIEW_PASSED_FILE,
     REVIEW_REJECTED_FILE,
-    REVIEW_FINAL_FILE,
     PLAN_REVIEW_FILE,
     IMPLEMENTATION_PLAN_FILE,
     PROGRESS_FILE,
     RECOVERY_NOTES_FILE,
     COMPLETED_FILE,
+    REVIEW_FINAL_FILE,
 ]
 
 ARCHIVE_FILE_FORMAT = re.compile(r"^(\d+)\.([a-f0-9]{32})\.(.+)$")
@@ -397,7 +397,7 @@ def cleanup_process_files(lock_token: str) -> None:
     archive_any_process_files(lock_token)
     files_to_remove = [
         *ARCHIVE_FILENAMES
-    ]
+    ][:-1] # leave the final review file in place
 
     for file_path in files_to_remove:
         path = Path(file_path)
@@ -407,6 +407,9 @@ def cleanup_process_files(lock_token: str) -> None:
                 print(f"Cleaned up: {file_path}")
             except Exception as e:
                 print(f"WARNING: Could not remove {file_path}: {e}")
+
+    if Path(REVIEW_FINAL_FILE).exists():
+        print(f"Final review file preserved: {REVIEW_FINAL_FILE}")
 
 
 def save_state_to_disk(state: RWLState) -> None:
