@@ -31,44 +31,39 @@ Ralph is a single-file Python script. You can drop it anywhere in your `$PATH`
 (e.g., `~/.local/bin/ralph.py`) and run it directly from your project root.
 
 ```text
-usage: ralph.py [-h] [--max-iterations MAX_ITERATIONS] [--test-instructions TEST_INSTRUCTIONS]
+usage: ralph.py [-h] [--version] [--max-iterations MAX_ITERATIONS]
+                [--test-instructions TEST_INSTRUCTIONS]
                 [--review-every REVIEW_EVERY] [--enhanced] [--final-review]
-                [--model MODEL] [--review-model REVIEW_MODEL] [--push-commits]
-                [--mock-mode] [--resume] [--force-resume]
-                [--reorganize-archive]
+                [--model MODEL] [--review-model REVIEW_MODEL]
+                [--timeout TIMEOUT] [--push-commits] [--mock-mode] [--resume]
+                [--force-resume] [--reorganize-archive]
                 [prompt]
 
-Enhanced RWL - AI Development Assistant
+Enhanced RWL - AI Code-monkey Tool
 
 positional arguments:
   prompt                The task description for RWL to work on
 
 options:
   -h, --help            show this help message and exit
+  --version             show program's version number and exit
   --max-iterations MAX_ITERATIONS
                         Maximum number of iterations (default: 20)
-  --skip-tests          Skip running tests during development
+  --test-instructions TEST_INSTRUCTIONS
+                        Instructions regarding testing during BUILD phase
   --review-every REVIEW_EVERY
-                        Trigger REVIEW phase every N iterations (default: 0,
-                        enhanced mode only)
-  --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-
-                        COMMIT)
-  --final-review        Run final REVIEW → BUILD → COMMIT cycle after
-                        completion
-  --model MODEL         AI model to use for development (default:
-                        opencode/big-pickle)
+                        Trigger REVIEW phase every N iterations (default: 0, enhanced mode only)
+  --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-COMMIT)
+  --final-review        Run final REVIEW → BUILD → COMMIT cycle after completion
+  --model MODEL         AI model to use for development (default: opencode/minimax-m2.1-free)
   --review-model REVIEW_MODEL
-                        AI model to use for reviews (default: opencode/big-
-                        pickle)
-  --push-commits        Push commits to remote repository after successful
-                        commit
+                        AI model to use for reviews (default: opencode/big-pickle)
+  --timeout TIMEOUT     Timeout in seconds for OpenCode calls (default: 1200)
+  --push-commits        Push commits to remote repository after successful commit
   --mock-mode           Use mock mode for testing (no external AI calls)
-  --resume              Resume from a previous session using saved state in
-                        .ralph/state.json
-  --force-resume        Force resume by removing any existing lock file
-                        (bypasses staleness check)
-  --reorganize-archive  Reorganize archives into per-session directories in
-                        .ralph/archive/
+  --resume              Resume from a previous session using saved state in .ralph/state.json
+  --force-resume        Force resume by removing any existing lock file (bypasses staleness check)
+  --reorganize-archive  Reorganize archives into per-session directories in .ralph/archive/
 
 Examples:
   ralph.py "Build a web scraper for news articles"
@@ -76,9 +71,11 @@ Examples:
   ralph.py --enhanced --final-review "Complex multi-module project"
   ralph.py --review-every 3 "Regular review cycles"
   ralph.py --mock-mode "Test without external dependencies"
-  ralph.py --resume "Resume interrupted session"
-  ralph.py --force-resume "Force resume with stale lock"
-  ralph.py --reorganize-archive # Reorganize archive files into session directories
+  ralph.py --resume
+  ralph.py --force-resume
+
+Note also that you can also use a prompt.md file, which is preferred
+for complex prompts.
 ```
 
 ## Configuration

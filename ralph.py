@@ -32,7 +32,7 @@ from string import Template
 
 
 # semver string
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 
 
 # Configuration Constants
@@ -92,6 +92,7 @@ class RWLState:
     push_commits: bool = field(default=False)
     original_prompt: str = field(default="")
     phase_recovered: bool = field(default=False)
+    timeout: int = field(default=OPENCODE_TIMEOUT)
 
 
 def setup_signal_handlers(state: RWLState) -> None:
@@ -552,7 +553,9 @@ def generate_build_prompt(state: RWLState) -> str:
     2. Review {PROGRESS_FILE} looking for information relevant for your chosen task.
     3. If the information from {PROGRESS_FILE} indicates your chosen task is
     currently blocked, work to unblock the chosen task.
-    4. Implement the task following best practices.
+    4. Implement the task following best practices. You do not have to complete
+    the task -- just do a meaningful amount of work. If tests related to your
+    chosen task fail, limit yourself to 5 attempts to fix it.
     5. Write what you learned, what you struggled with, and what remains to be
     done for this task in {PROGRESS_FILE}. If there was any incorrect information
     in {PROGRESS_FILE}, correct it.
@@ -775,16 +778,20 @@ def generate_recovery_prompt(state: RWLState) -> str:
     - Root cause analysis
     - If it was a timeout:
         - Provide guidance for continuing where the previous phase left off
+        - Suggest ways to ensure task work is broken up enough to avoid another timeout
     - If it was NOT a timeout:
         - Specific steps to resolve the issue
         - Prevention measures for future iterations
         - Whether to retry the failed phase or continue with adjustments
 
-    GOAL: Provide actionable recovery guidance to get development back on track.""")
+    GOAL: Provide concise, actionable recovery guidance to get development back on track.""")
     return interpolate_template(template, state)
 
 
-def call_opencode(prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT, mock_mode: bool = False) -> tuple[bool, str]:
+def call_opencode(
+        prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
+        mock_mode: bool = False
+    ) -> tuple[bool, str]:
     """Call OpenCode with the given prompt and return success status and output."""
     if mock_mode:
         # Mock mode for testing
@@ -830,7 +837,8 @@ def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
 
     # Execute the plan generation
     success, result = call_opencode(
-        initial_plan_prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode
+        initial_plan_prompt, state.model, state.lock_token or "",
+        timeout=state.timeout, mock_mode=state.mock_mode
     )
     total_result = result
     if not success:
@@ -839,7 +847,8 @@ def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
     # Now enter plan revision loop
     for _ in range(2):
         success, result = call_opencode(
-            plan_review_prompt, state.review_model, state.lock_token or "", mock_mode=state.mock_mode
+            plan_review_prompt, state.review_model, state.lock_token or "",
+            timeout=state.timeout, mock_mode=state.mock_mode
         )
         total_result += f'\n\n{result}'
         if not success:
@@ -847,7 +856,8 @@ def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
         if not Path(PLAN_REVIEW_FILE).exists():
             return True, total_result
         success, result = call_opencode(
-            revise_plan_prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode
+            revise_plan_prompt, state.model, state.lock_token or "",
+            timeout=state.timeout, mock_mode=state.mock_mode
         )
         total_result += f'\n\n{result}'
         if not success:
@@ -870,7 +880,10 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
         prompt = generate_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             print("BUILD phase completed successfully")
@@ -898,7 +911,10 @@ def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
         prompt = generate_final_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             print("Final BUILD phase completed successfully")
@@ -943,7 +959,10 @@ def execute_review_phase(
             prompt = generate_review_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.review_model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             # Verify that exactly one of the required files was created
@@ -988,7 +1007,10 @@ def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
         prompt = generate_plan_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             # Clean up REVIEW_REJECTED_FILE if it existed
@@ -1023,7 +1045,10 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
         prompt = generate_commit_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             # Clean up REVIEW_PASSED_FILE
@@ -1058,7 +1083,10 @@ def execute_recovery_phase(state: RWLState) -> tuple[bool, str]:
         prompt = generate_recovery_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(prompt, state.model, state.lock_token or "", mock_mode=state.mock_mode)
+        success, result = call_opencode(
+            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
 
         if success:
             print("RECOVERY phase completed successfully")
@@ -1298,7 +1326,7 @@ def check_template_generation(state: RWLState) -> bool:
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Enhanced RWL - AI Development Assistant",
+        description="Enhanced RWL - AI Code-monkey Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1307,9 +1335,11 @@ Examples:
   %(prog)s --enhanced --final-review "Complex multi-module project"
   %(prog)s --review-every 3 "Regular review cycles"
   %(prog)s --mock-mode "Test without external dependencies"
-  %(prog)s --resume "Resume interrupted session"
-  %(prog)s --force-resume "Force resume with stale lock"
-        """
+  %(prog)s --resume
+  %(prog)s --force-resume
+
+Note also that you can also use a prompt.md file, which is preferred
+for complex prompts."""
     )
 
     parser.add_argument(
@@ -1367,6 +1397,13 @@ Examples:
         "--review-model",
         default=DEFAULT_REVIEW_MODEL,
         help=f"AI model to use for reviews (default: {DEFAULT_REVIEW_MODEL})"
+    )
+
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=OPENCODE_TIMEOUT,
+        help=f"Timeout in seconds for OpenCode calls (default: {OPENCODE_TIMEOUT})"
     )
 
     parser.add_argument(
@@ -1492,6 +1529,7 @@ def main() -> int:
             start_time=time.time(),
             push_commits=args.push_commits,
             original_prompt=prompt_content,
+            timeout=args.timeout,
         )
 
     # Set up signal handlers
