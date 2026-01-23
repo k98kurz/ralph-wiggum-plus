@@ -1,6 +1,6 @@
 {
-  "iteration": 14,
-  "current_phase": "COMMIT",
+  "iteration": 15,
+  "current_phase": "REVIEW",
   "failed_phase": null,
   "retry_count": 0,
   "max_iterations": 20,
@@ -53,7 +53,9 @@
     "COMMIT_13",
     "BUILD_14",
     "REVIEW_14",
-    "COMMIT_14"
+    "COMMIT_14",
+    "BUILD_15",
+    "REVIEW_15"
   ],
   "last_error": null,
   "final_review_requested": true,
