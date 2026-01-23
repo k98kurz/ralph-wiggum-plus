@@ -118,6 +118,12 @@ class TestArchiveSystem(unittest.TestCase):
         archive_dir = research_dir / "archive"
         archive_dir.mkdir(parents=True, exist_ok=True)
 
+        self.state = research.RWRState(
+            research_name=self.research_name,
+            lock_token=self.lock_token,
+            original_topic="Test topic"
+        )
+
         try:
             result = subprocess.run(
                 ["git", "log", "-1", "--oneline"],
@@ -156,12 +162,13 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_intermediate_file_basic(self):
         """Test basic single file archiving."""
-        test_file = Path("progress.md")
+        research_dir = Path(f".research/{self.research_name}")
+        test_file = research_dir / "progress.md"
         test_file.write_text("Test content")
 
-        research.archive_intermediate_file(test_file, self.lock_token, self.research_name)
+        research.archive_intermediate_file(test_file, self.state)
 
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        archive_dir = research_dir / "archive"
         archives = list(archive_dir.glob(f"*.{self.lock_token}.progress.md"))
 
         assert len(archives) == 1, (
@@ -193,12 +200,13 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_intermediate_file_with_prepend(self):
         """Test archiving file with prepend parameter for subtopics."""
-        test_file = Path("progress.md")
+        research_dir = Path(f".research/{self.research_name}")
+        test_file = research_dir / "progress.md"
         test_file.write_text("Test content for subtopic")
 
-        research.archive_intermediate_file(test_file, self.lock_token, self.research_name, prepend="machine-learning")
+        research.archive_intermediate_file(test_file, self.state, prepend="machine-learning")
 
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        archive_dir = research_dir / "archive"
         archives = list(archive_dir.glob(f"*.{self.lock_token}.machine-learning.progress.md"))
 
         assert len(archives) == 1, (
@@ -208,14 +216,15 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_intermediate_file_deduplication(self):
         """Test hash-based deduplication prevents duplicate archives."""
-        test_file = Path("progress.md")
+        research_dir = Path(f".research/{self.research_name}")
+        test_file = research_dir / "progress.md"
         test_file.write_text("Test content")
 
-        research.archive_intermediate_file(test_file, self.lock_token, self.research_name)
-        archives_after_first = list(Path(f".research/{self.research_name}/archive").glob(f"*.{self.lock_token}.progress.md"))
+        research.archive_intermediate_file(test_file, self.state)
+        archives_after_first = list((research_dir / "archive").glob(f"*.{self.lock_token}.progress.md"))
 
-        research.archive_intermediate_file(test_file, self.lock_token, self.research_name)
-        archives_after_second = list(Path(f".research/{self.research_name}/archive").glob(f"*.{self.lock_token}.progress.md"))
+        research.archive_intermediate_file(test_file, self.state)
+        archives_after_second = list((research_dir / "archive").glob(f"*.{self.lock_token}.progress.md"))
 
         assert len(archives_after_first) == 1, (
             "First archive should create one file",
@@ -234,8 +243,8 @@ class TestArchiveSystem(unittest.TestCase):
         old_hash = hashlib.sha256(b"Test content").hexdigest()
         research.ARCHIVED_HASHES.discard(old_hash)
 
-        research.archive_intermediate_file(test_file, self.lock_token, self.research_name)
-        archives_after_third = list(Path(f".research/{self.research_name}/archive").glob(f"*.{self.lock_token}.progress.md"))
+        research.archive_intermediate_file(test_file, self.state)
+        archives_after_third = list((research_dir / "archive").glob(f"*.{self.lock_token}.progress.md"))
 
         assert len(archives_after_third) == 2, (
             "Modified content should create new archive",
@@ -244,11 +253,12 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_intermediate_file_nonexistent(self):
         """Test graceful handling of missing files."""
-        nonexistent_file = Path("does_not_exist.md")
+        research_dir = Path(f".research/{self.research_name}")
+        nonexistent_file = research_dir / "does_not_exist.md"
 
-        research.archive_intermediate_file(nonexistent_file, self.lock_token, self.research_name)
+        research.archive_intermediate_file(nonexistent_file, self.state)
 
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        archive_dir = research_dir / "archive"
         archives = list(archive_dir.glob(f"*.{self.lock_token}.does_not_exist.md"))
 
         assert len(archives) == 0, (
@@ -263,21 +273,22 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_any_process_files(self):
         """Test batch archiving of all tracked process files."""
-        progress_file = Path("progress.md")
+        research_dir = Path(f".research/{self.research_name}")
+        progress_file = research_dir / "progress.md"
         progress_file.write_text("Progress content")
 
-        accepted_file = Path("review.accepted.md")
+        accepted_file = research_dir / "review.accepted.md"
         accepted_file.write_text("Review accepted")
 
-        rejected_file = Path("review.rejected.md")
+        rejected_file = research_dir / "review.rejected.md"
         rejected_file.write_text("Review rejected")
 
-        control_file = Path("ignored_file.txt")
+        control_file = research_dir / "ignored_file.txt"
         control_file.write_text("Ignored content")
 
-        research.archive_any_process_files(self.lock_token, self.research_name)
+        research.archive_any_process_files(self.state)
 
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        archive_dir = research_dir / "archive"
 
         archived_progress = list(archive_dir.glob(f"*.{self.lock_token}.progress.md"))
         archived_accepted = list(archive_dir.glob(f"*.{self.lock_token}.review.accepted.md"))
@@ -306,16 +317,17 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_archive_progress_subdirectory_files(self):
         """Test archiving progress files from subdirectories."""
-        progress_dir = Path(f".research/{self.research_name}/progress")
+        research_dir = Path(f".research/{self.research_name}")
+        progress_dir = research_dir / "progress"
         subtopic_dir = progress_dir / "machine-learning"
         subtopic_dir.mkdir(parents=True, exist_ok=True)
 
         progress_file = subtopic_dir / "findings.md"
         progress_file.write_text("ML findings content")
 
-        research.archive_any_process_files(self.lock_token, self.research_name)
+        research.archive_any_process_files(self.state)
 
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        archive_dir = research_dir / "archive"
         archived_ml = list(archive_dir.glob(f"*.{self.lock_token}.machine-learning.findings.md"))
 
         assert len(archived_ml) == 1, (
@@ -325,21 +337,25 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_populate_archived_hashes(self):
         """Test hash loading from existing archives."""
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        research_dir = Path(f".research/{self.research_name}")
+        archive_dir = research_dir / "archive"
 
         for i in range(3):
             archive_name = f"1234567890.{self.lock_token}.file{i}.md"
             archive_path = archive_dir / archive_name
             archive_path.write_text(f"Content {i}")
 
-        different_token = secrets.token_hex(16)
-        different_archive_name = f"1234567890.{different_token}.other.md"
+        different_state = research.RWRState(
+            research_name=self.research_name,
+            lock_token=secrets.token_hex(16)
+        )
+        different_archive_name = f"1234567890.{different_state.lock_token}.other.md"
         different_archive_path = archive_dir / different_archive_name
         different_archive_path.write_text("Other content")
 
         research.ARCHIVED_HASHES.clear()
 
-        research.populate_archived_hashes(self.lock_token, self.research_name)
+        research.populate_archived_hashes(self.state)
 
         assert len(research.ARCHIVED_HASHES) == 3, (
             "Should load exactly 3 hashes for matching token",
@@ -361,7 +377,8 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_reorganize_archive_files_basic_with_git(self):
         """Test reorganization using git mv when git available."""
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        research_dir = Path(f".research/{self.research_name}")
+        archive_dir = research_dir / "archive"
         token_A = secrets.token_hex(16)
 
         for i in range(3):
@@ -376,8 +393,9 @@ class TestArchiveSystem(unittest.TestCase):
             check=True
         )
 
+        state = research.RWRState(research_name=self.research_name)
         token_B = secrets.token_hex(16)
-        research.reorganize_archive_files(token_B, self.research_name)
+        research.reorganize_archive_files(state, token_B)
 
         session_dir = archive_dir / token_A
         assert session_dir.exists(), (
@@ -409,7 +427,8 @@ class TestArchiveSystem(unittest.TestCase):
 
     def test_reorganize_archive_files_fallback_to_copy(self):
         """Test fallback to shutil.copy2 when git mv fails."""
-        archive_dir = Path(f".research/{self.research_name}/archive")
+        research_dir = Path(f".research/{self.research_name}")
+        archive_dir = research_dir / "archive"
         token_A = secrets.token_hex(16)
 
         for i in range(3):
@@ -417,8 +436,9 @@ class TestArchiveSystem(unittest.TestCase):
             archive_path = archive_dir / archive_name
             archive_path.write_text(f"Content {i}")
 
+        state = research.RWRState(research_name=self.research_name)
         token_B = secrets.token_hex(16)
-        research.reorganize_archive_files(token_B, self.research_name)
+        research.reorganize_archive_files(state, token_B)
 
         session_dir = archive_dir / token_A
         assert session_dir.exists(), (
@@ -453,8 +473,9 @@ class TestArchiveSystem(unittest.TestCase):
             archive_path = archive_dir / archive_name
             archive_path.write_text(f"Content {i}")
 
+        state = research.RWRState(research_name=self.research_name)
         token_C = secrets.token_hex(16)
-        research.reorganize_archive_files(token_C, self.research_name)
+        research.reorganize_archive_files(state, token_C)
 
         token_A_session_dir = archive_dir / token_A
         assert not token_A_session_dir.exists(), (
@@ -490,7 +511,8 @@ class TestArchiveSystem(unittest.TestCase):
             archive_path = archive_dir / archive_name
             archive_path.write_text(f"Content {i}")
 
-        research.reorganize_archive_files(active_token, self.research_name)
+        state = research.RWRState(research_name=self.research_name)
+        research.reorganize_archive_files(state, active_token)
 
         active_session_dir = archive_dir / active_token
         assert not active_session_dir.exists(), (
@@ -518,8 +540,9 @@ class TestArchiveSystem(unittest.TestCase):
             archive_path = archive_dir / archive_name
             archive_path.write_text(f"New content {i}")
 
+        state = research.RWRState(research_name=self.research_name)
         token_B = secrets.token_hex(16)
-        research.reorganize_archive_files(token_B, self.research_name)
+        research.reorganize_archive_files(state, token_B)
 
         new_session_dir = archive_dir / f"{token_A}_1"
         assert new_session_dir.exists(), (
@@ -540,8 +563,9 @@ class TestArchiveSystem(unittest.TestCase):
         if archive_dir.exists():
             shutil.rmtree(archive_dir)
 
+        state = research.RWRState(research_name=self.research_name)
         token_A = secrets.token_hex(16)
-        research.reorganize_archive_files(token_A, self.research_name)
+        research.reorganize_archive_files(state, token_A)
 
         subdirs = [d for d in archive_dir.iterdir()] if archive_dir.exists() else []
         assert len(subdirs) == 0, (
@@ -562,13 +586,13 @@ class TestArchiveSystem(unittest.TestCase):
         test_file2 = Path("file2.md")
         test_file2.write_text("Content 2")
 
-        research.archive_intermediate_file(test_file1, self.lock_token, self.research_name)
+        research.archive_intermediate_file(test_file1, self.state)
         archives_before_sleep = list(archive_dir.glob(f"*.{self.lock_token}.file1.md"))
         timestamp1 = int(archives_before_sleep[0].name.split('.')[0])
 
         time.sleep(1.5)
 
-        research.archive_intermediate_file(test_file2, self.lock_token, self.research_name)
+        research.archive_intermediate_file(test_file2, self.state)
         archives_after_sleep = list(archive_dir.glob(f"*.{self.lock_token}.file2.md"))
         timestamp2 = int(archives_after_sleep[0].name.split('.')[0])
 
@@ -588,7 +612,7 @@ class TestArchiveSystem(unittest.TestCase):
         test_files = [Path(f) for f in test_files]
         for i, test_file in enumerate(test_files):
             test_file.write_text(f"Content {i}")
-            research.archive_intermediate_file(test_file, self.lock_token, self.research_name)
+            research.archive_intermediate_file(test_file, self.state)
 
         archive_dir = Path(f".research/{self.research_name}/archive")
         archives = list(archive_dir.glob(f"*.{self.lock_token}.*"))
@@ -784,6 +808,9 @@ class TestLockingMechanism(unittest.TestCase):
         assert "created" in lock_data, "Lock should have created timestamp"
         assert "pid" in lock_data, "Lock should have pid"
 
+        state = research.RWRState(research_name=self.research_name, lock_token=token)
+        assert research.check_project_lock(state)
+
     def test_get_project_lock_rejects_existing_valid(self):
         """Test that get_project_lock rejects existing valid lock."""
         token1 = research.get_project_lock(self.research_name)
@@ -817,7 +844,8 @@ class TestLockingMechanism(unittest.TestCase):
         token = research.get_project_lock(self.research_name)
         assert token is not None
 
-        valid = research.check_project_lock(token, self.research_name)
+        state = research.RWRState(research_name=self.research_name, lock_token=token)
+        valid = research.check_project_lock(state)
         assert valid, "Should return True for valid token"
 
     def test_check_project_lock_invalid(self):
@@ -825,7 +853,8 @@ class TestLockingMechanism(unittest.TestCase):
         token = research.get_project_lock(self.research_name)
         assert token is not None
 
-        invalid = research.check_project_lock("invalid_token", self.research_name)
+        state = research.RWRState(research_name=self.research_name, lock_token="invalid_token")
+        invalid = research.check_project_lock(state)
         assert not invalid, "Should return False for invalid token"
 
     def test_release_project_lock(self):
@@ -833,7 +862,8 @@ class TestLockingMechanism(unittest.TestCase):
         token = research.get_project_lock(self.research_name)
         assert token is not None
 
-        research.release_project_lock(token, self.research_name)
+        state = research.RWRState(research_name=self.research_name, lock_token=token)
+        research.release_project_lock(state)
 
         lock_file = Path(f".research/{self.research_name}/research.lock.json")
         assert not lock_file.exists(), "Lock file should be removed"
