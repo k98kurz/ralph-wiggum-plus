@@ -103,7 +103,7 @@ def setup_signal_handlers(state: RWRState) -> None:
     """Set up signal handlers for graceful shutdown."""
     def signal_handler(signum: int, frame) -> None:
         print(f"\nReceived signal {signum}, shutting down gracefully...")
-        release_project_lock(state.lock_token, state.research_name)
+        release_project_lock(state)
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -131,13 +131,13 @@ ARCHIVE_FILENAMES = [
 ARCHIVE_FILE_FORMAT = re.compile(r"^(\d+)\.([a-f0-9]{32})\.(.+)$")
 
 
-def populate_archived_hashes(lock_token: str, research_name: str) -> None:
+def populate_archived_hashes(state: RWRState) -> None:
     """Populate the in-memory hash set from existing archives for this token."""
-    archive_dir = Path(f".research/{research_name}/archive")
+    archive_dir = Path(f".research/{state.research_name}/archive")
     if not archive_dir.exists():
         return
 
-    for archive_file in archive_dir.glob(f"*.{lock_token}.*"):
+    for archive_file in archive_dir.glob(f"*.{state.lock_token}.*"):
         try:
             content = archive_file.read_bytes()
             file_hash = hashlib.sha256(content).hexdigest()
@@ -158,14 +158,14 @@ def archive_intermediate_file(file_path: Path, state: RWRState, prepend: str = "
         if file_hash in ARCHIVED_HASHES:
             return
 
-        archive_dir = Path(f".research/{research_name}/archive")
+        archive_dir = Path(f".research/{state.research_name}/archive")
         archive_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = int(time.time())
         original_name = file_path.name
         if prepend:
             original_name = f"{prepend}.{original_name}"
-        archive_name = f"{timestamp}.{lock_token}.{original_name}"
+        archive_name = f"{timestamp}.{state.lock_token}.{original_name}"
         archive_path = archive_dir / archive_name
 
         shutil.copy2(file_path, archive_path)
@@ -177,25 +177,25 @@ def archive_intermediate_file(file_path: Path, state: RWRState, prepend: str = "
 
 def archive_any_process_files(state: RWRState) -> None:
     """Check for and archive any intermediate files."""
-    file_dir = Path(f".research/{state.session_name}")
+    file_dir = Path(f".research/{state.research_name}")
     for file_name in ARCHIVE_FILENAMES:
-        archive_intermediate_file(Path(file_dir/file_name), state)
+        archive_intermediate_file(file_dir / file_name, state)
 
-    progress_dir = Path(f".research/{research_name}/progress")
+    progress_dir = Path(f".research/{state.research_name}/progress")
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
             if progress_file.name != "README.md":
                 subtopic = progress_file.parent.name
-                archive_intermediate_file(progress_file, lock_token, research_name, prepend=subtopic)
+                archive_intermediate_file(progress_file, state, prepend=subtopic)
 
 
-def reorganize_archive_files(lock_token: str | None, research_name: str) -> None:
+def reorganize_archive_files(state: RWRState, current_token: str | None = None) -> None:
     """Reorganize archives into per-session directories.
 
     Skips files matching the current lock token to allow active sessions to continue.
     Only reorganizes sessions with 2 or more files.
     """
-    archive_dir = Path(f".research/{research_name}/archive")
+    archive_dir = Path(f".research/{state.research_name}/archive")
     if not archive_dir.exists():
         return
 
@@ -208,7 +208,8 @@ def reorganize_archive_files(lock_token: str | None, research_name: str) -> None
         match = ARCHIVE_FILE_FORMAT.match(archive_file.name)
         if match:
             timestamp_str, token, original_name = match.groups()
-            if lock_token and token == lock_token:
+            token_to_skip = current_token if current_token is not None else state.lock_token
+            if token_to_skip and token == token_to_skip:
                 continue
             if token not in token_files:
                 token_files[token] = []
@@ -388,9 +389,9 @@ def get_project_lock(research_name: str, force_resume: bool = False) -> str | No
         return None
 
 
-def check_project_lock(token: str, research_name: str) -> bool:
+def check_project_lock(state: RWRState) -> bool:
     """Check if the project lock is still valid."""
-    lock_file = Path(f".research/{research_name}/research.lock.json")
+    lock_file = Path(f".research/{state.research_name}/research.lock.json")
 
     if not lock_file.exists():
         return False
@@ -399,7 +400,7 @@ def check_project_lock(token: str, research_name: str) -> bool:
         with open(lock_file, "r") as f:
             lock_data = json.load(f)
 
-        valid = lock_data.get("lock_token") == token
+        valid = lock_data.get("lock_token") == state.lock_token
         if valid:
             lock_data["created"] = time.time()
             with open(lock_file, "w") as f:
@@ -409,34 +410,35 @@ def check_project_lock(token: str, research_name: str) -> bool:
         return False
 
 
-def release_project_lock(token: str | None, research_name: str) -> None:
+def release_project_lock(state: RWRState) -> None:
     """Release the project lock."""
-    if not token:
+    if not state.lock_token:
         return
 
-    lock_file = Path(f".research/{research_name}/research.lock.json")
+    lock_file = Path(f".research/{state.research_name}/research.lock.json")
 
     try:
         if lock_file.exists():
             with open(lock_file, "r") as f:
                 lock_data = json.load(f)
 
-            if lock_data.get("lock_token") == token:
+            if lock_data.get("lock_token") == state.lock_token:
                 lock_file.unlink()
                 print("Project lock released")
     except (json.JSONDecodeError, KeyError, OSError) as e:
         print(f"WARNING: Error releasing lock: {e}")
 
 
-def cleanup_process_files(lock_token: str, research_name: str) -> None:
+def cleanup_process_files(state: RWRState) -> None:
     """Clean up lingering process files after successful completion."""
-    archive_any_process_files(lock_token, research_name)
+    archive_any_process_files(state)
     files_to_remove = [
         *ARCHIVE_FILENAMES
     ]
 
+    research_dir = Path(f".research/{state.research_name}")
     for file_path in files_to_remove:
-        path = Path(file_path)
+        path = research_dir / file_path
         if path.exists():
             try:
                 path.unlink()
@@ -444,7 +446,7 @@ def cleanup_process_files(lock_token: str, research_name: str) -> None:
             except Exception as e:
                 print(f"WARNING: Could not remove {file_path}: {e}")
 
-    progress_dir = Path(f".research/{research_name}/progress")
+    progress_dir = research_dir / "progress"
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
             if progress_file.name != "README.md":
@@ -856,7 +858,7 @@ def generate_recovery_prompt(state: RWRState) -> str:
 
 def execute_research_phase(state: RWRState) -> tuple[bool, str]:
     """Execute the RESEARCH phase."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print(f"Starting RESEARCH phase")
@@ -884,7 +886,7 @@ def execute_research_phase(state: RWRState) -> tuple[bool, str]:
 
 def execute_review_phase(state: RWRState, is_final: bool = False) -> tuple[bool, str]:
     """Execute the REVIEW phase."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print(f"Starting {'FINAL ' if is_final else ''}REVIEW phase")
@@ -931,7 +933,7 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> tuple[bool,
 
 def execute_synthesize_phase(state: RWRState) -> tuple[bool, str]:
     """Execute the SYNTHESIZE phase."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print("Starting SYNTHESIZE phase")
@@ -959,7 +961,7 @@ def execute_synthesize_phase(state: RWRState) -> tuple[bool, str]:
 
 def execute_revise_phase(state: RWRState) -> tuple[bool, str]:
     """Execute the REVISE phase."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print("Starting REVISE phase")
@@ -987,7 +989,7 @@ def execute_revise_phase(state: RWRState) -> tuple[bool, str]:
 
 def execute_recovery_phase(state: RWRState) -> tuple[bool, str]:
     """Execute the RECOVERY phase."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print(f"Starting RECOVERY phase for {state.failed_phase}")
@@ -1034,7 +1036,7 @@ def retry_failed_phase(state: RWRState, failed_phase: str) -> tuple[bool, str]:
 def handle_phase_failure(state: RWRState, failed_phase: str, error: str) -> tuple[bool, int]:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     state.failed_phase = failed_phase
@@ -1078,10 +1080,10 @@ def handle_phase_failure(state: RWRState, failed_phase: str, error: str) -> tupl
     return False, state.retry_count
 
 
-def check_for_completion(research_name: str) -> bool:
+def check_for_completion(state: RWRState) -> bool:
     """Check for the completed.md file."""
     try:
-        completed_file = Path(f".research/{research_name}/completed.md")
+        completed_file = Path(f".research/{state.research_name}/completed.md")
         if completed_file.exists():
             return True
     except:
@@ -1106,10 +1108,10 @@ def check_all_topics_complete(research_name: str) -> bool:
     return False
 
 
-def get_completion_stats(research_name: str) -> tuple[int, int]:
+def get_completion_stats(state: RWRState) -> tuple[int, int]:
     """Get completion statistics from research_plan.md."""
     try:
-        plan_file = Path(f".research/{research_name}/research_plan.md")
+        plan_file = Path(f".research/{state.research_name}/research_plan.md")
         if not plan_file.exists():
             return 0, 0
 
@@ -1124,7 +1126,7 @@ def get_completion_stats(research_name: str) -> tuple[int, int]:
 
 def run_final_cycle(state: RWRState) -> None:
     """Run SYNTHESIZE → REVIEW → REVISE final cycle."""
-    if not state.lock_token or not check_project_lock(state.lock_token, state.research_name):
+    if not state.lock_token or not check_project_lock(state):
         raise Exception('lost the lock; aborting loop')
 
     print("Running final SYNTHESIZE-REVIEW-REVISE cycle...")
@@ -1183,21 +1185,25 @@ def main_loop(state: RWRState) -> None:
         save_state_to_disk(state)
 
         if (path_dir/"review.accepted.md").exists():
-            # delete review.accepted.md file so it is only used once
-            ...
+            try:
+                (path_dir/"review.accepted.md").unlink()
+            except Exception as e:
+                print(f"WARNING: Could not delete review.accepted.md: {e}")
         if (path_dir/"review.rejected.md").exists():
-            # delete review.rejected.md file so it is only used once
-            ...
+            try:
+                (path_dir/"review.rejected.md").unlink()
+            except Exception as e:
+                print(f"WARNING: Could not delete review.rejected.md: {e}")
 
         review_success, review_result = execute_review_phase(state)
         state.phase_history.append(f"REVIEW_{state.iteration}")
         if not review_success:
             handle_phase_failure(state, Phase.REVIEW.value, review_result)
 
-        state.is_complete = check_for_completion(state.research_name)
+        state.is_complete = check_for_completion(state)
         save_state_to_disk(state)
 
-    complete, total = get_completion_stats(state.research_name)
+    complete, total = get_completion_stats(state)
 
     if state.iteration >= state.max_iterations and not state.is_complete:
         print(f"WARNING: Iteration limit ({state.max_iterations}) reached before all topics were completed")
@@ -1215,11 +1221,11 @@ def main_loop(state: RWRState) -> None:
                 report_file.write_text(banner + "\n" + content)
                 print("Added iteration limit warning to report")
 
-        cleanup_process_files(state.lock_token or "", state.research_name)
+        cleanup_process_files(state)
 
-        archive_any_process_files(state.lock_token or "", state.research_name)
+        archive_any_process_files(state)
 
-        release_project_lock(state.lock_token, state.research_name)
+        release_project_lock(state)
 
         print("\n" + "="*60)
         print("RESEARCH COMPLETE")
@@ -1367,16 +1373,16 @@ def main() -> int:
     args = parse_arguments()
 
     if args.reorganize_archive:
-        lock_token = None
+        minimal_state = RWRState(research_name=args.name, lock_token=None)
         lock_file = Path(f".research/{args.name}/research.lock.json")
         if lock_file.exists():
             try:
                 with open(lock_file, "r") as f:
                     lock_data = json.load(f)
-                lock_token = lock_data.get("lock_token")
+                minimal_state.lock_token = lock_data.get("lock_token")
             except Exception:
                 pass
-        reorganize_archive_files(lock_token, args.name)
+        reorganize_archive_files(minimal_state)
         return 0
 
     topic = args.topic
@@ -1408,7 +1414,7 @@ def main() -> int:
             return 1
 
         state.lock_token = lock_token
-        populate_archived_hashes(lock_token, args.name)
+        populate_archived_hashes(state)
     else:
         min_iterations = calculate_min_iterations(args.breadth, args.depth)
 
@@ -1464,7 +1470,7 @@ def main() -> int:
 
         setup_signal_handlers(state)
 
-        populate_archived_hashes(lock_token, args.name)
+        populate_archived_hashes(state)
 
         if not check_template_generation(state):
             print("ERROR: Template validation failed")
