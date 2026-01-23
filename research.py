@@ -59,7 +59,6 @@ class Phase(Enum):
 @dataclass
 class RWRState:
     """Represents the current state of the RWR process."""
-    original_topic: str = field(default="")
     breadth: int = field(default=DEFAULT_BREADTH)
     depth: int = field(default=DEFAULT_DEPTH)
     iteration: int = field(default=0)
@@ -78,6 +77,7 @@ class RWRState:
     phase_recovered: bool = field(default=False)
     timeout: int = field(default=OPENCODE_TIMEOUT)
     research_name: str = field(default="")
+    original_topic: str = field(default="")
 
 
 def calculate_min_iterations(breadth: int, depth: int) -> int:
@@ -146,7 +146,7 @@ def populate_archived_hashes(lock_token: str, research_name: str) -> None:
             print(f"WARNING: Could not read archive file {archive_file}: {e}")
 
 
-def archive_intermediate_file(file_path: Path, lock_token: str, research_name: str, prepend: str = "") -> None:
+def archive_intermediate_file(file_path: Path, state: RWRState, prepend: str = "") -> None:
     """Archive an intermediate file with a timestamp prefix if it hasn't been archived yet."""
     if not file_path.exists():
         return
@@ -175,10 +175,11 @@ def archive_intermediate_file(file_path: Path, lock_token: str, research_name: s
         print(f"WARNING: Could not archive {file_path}: {e}")
 
 
-def archive_any_process_files(lock_token: str, research_name: str) -> None:
+def archive_any_process_files(state: RWRState) -> None:
     """Check for and archive any intermediate files."""
+    file_dir = Path(f".research/{state.session_name}")
     for file_name in ARCHIVE_FILENAMES:
-        archive_intermediate_file(Path(file_name), lock_token, research_name)
+        archive_intermediate_file(Path(file_dir/file_name), state)
 
     progress_dir = Path(f".research/{research_name}/progress")
     if progress_dir.exists():
@@ -1169,6 +1170,7 @@ This report was generated before all research topics were completed due to reach
 def main_loop(state: RWRState) -> None:
     """Main RWR loop orchestrating research phases."""
     save_state_to_disk(state)
+    path_dir = Path(f".research/{state.research_name}")
 
     while state.iteration < state.max_iterations and not state.is_complete:
         state.iteration += 1
@@ -1178,17 +1180,21 @@ def main_loop(state: RWRState) -> None:
             handle_phase_failure(state, Phase.RESEARCH.value, result)
 
         state.phase_history.append(f"RESEARCH_{state.iteration}")
-
         save_state_to_disk(state)
 
-        if Path("review.accepted.md").exists() or Path("review.rejected.md").exists():
-            review_success, review_result = execute_review_phase(state)
-            state.phase_history.append(f"REVIEW_{state.iteration}")
-            if not review_success:
-                handle_phase_failure(state, Phase.REVIEW.value, review_result)
+        if (path_dir/"review.accepted.md").exists():
+            # delete review.accepted.md file so it is only used once
+            ...
+        if (path_dir/"review.rejected.md").exists():
+            # delete review.rejected.md file so it is only used once
+            ...
+
+        review_success, review_result = execute_review_phase(state)
+        state.phase_history.append(f"REVIEW_{state.iteration}")
+        if not review_success:
+            handle_phase_failure(state, Phase.REVIEW.value, review_result)
 
         state.is_complete = check_for_completion(state.research_name)
-
         save_state_to_disk(state)
 
     complete, total = get_completion_stats(state.research_name)
