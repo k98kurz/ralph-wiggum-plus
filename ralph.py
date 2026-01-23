@@ -32,19 +32,19 @@ from string import Template
 
 
 # semver string
-VERSION = "0.0.7"
+VERSION = "0.0.8"
 
 
 # Configuration Constants
-DEFAULT_MODEL = "opencode/minimax-m2.1-free"
-DEFAULT_REVIEW_MODEL = "opencode/big-pickle"
-OPENCODE_TIMEOUT = 1200 # 20 minutes
-DEFAULT_MAX_ITERATIONS = 20
-DEFAULT_REVIEW_EVERY = 0
-PHASE_RETRY_LIMIT = 3
-RETRY_WAIT_SECONDS = 30
-RECOVERY_WAIT_SECONDS = 10
-STALE_LOCK_TIMEOUT = 3600 # 60 minutes
+DEFAULT_MODEL = os.getenv("RALPH_MODEL", "opencode/grok-code")
+DEFAULT_REVIEW_MODEL = os.getenv("RALPH_REVIEW_MODEL", "opencode/grok-code")
+OPENCODE_TIMEOUT = int(os.getenv("RALPH_TIMEOUT", 1200)) # 20 minutes
+DEFAULT_MAX_ITERATIONS = int(os.getenv("RALPH_MAX_ITERATIONS", 20))
+DEFAULT_REVIEW_EVERY = int(os.getenv("RALPH_REVIEW_EVERY", 0))
+PHASE_RETRY_LIMIT = int(os.getenv("RALPH_RETRY_LIMIT", 3))
+RETRY_WAIT_SECONDS = int(os.getenv("RALPH_RETRY_WAIT", 30))
+RECOVERY_WAIT_SECONDS = int(os.getenv("RALPH_RECOVERY_WAIT", 10))
+STALE_LOCK_TIMEOUT = int(os.getenv("RALPH_STALE_LOCK_TIMEOUT", 3600)) # 60 minutes
 
 # Filename Constants
 STATE_FILE = ".ralph/state.json"
@@ -550,6 +550,8 @@ def generate_build_prompt(state: RWLState) -> str:
     INSTRUCTIONS:
     1. Read the {IMPLEMENTATION_PLAN_FILE} file to identify a task that has not
     been completed and seems the most important to work on.
+        - If all tasks have been completed, create a {COMPLETED_FILE} with the
+        content "<promise>COMPLETE</promise>", then halt.
     2. Review {PROGRESS_FILE} looking for information relevant for your chosen task.
     3. If the information from {PROGRESS_FILE} indicates your chosen task is
     currently blocked, work to unblock the chosen task.
@@ -569,7 +571,9 @@ def generate_build_prompt(state: RWLState) -> str:
     - Focus on one task at a time
 
     PROGRESS TRACKING:
-    - Update {PROGRESS_FILE} with: learnings, struggles, remaining work
+    - Update {PROGRESS_FILE} with: learnings, struggles, remaining work; only
+    record what is meaningful and useful for future iterations; do not fill the
+    file with meaningless fluff.
     - If all tasks are marked as "Done" or "Complete" in {IMPLEMENTATION_PLAN_FILE},
     create {COMPLETED_FILE} with exactly: <promise>COMPLETE</promise>
 
