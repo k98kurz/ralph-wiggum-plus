@@ -7,7 +7,7 @@ through a structured four-phase cycle: BUILD-REVIEW-PLAN-COMMIT.
 
 Usage:
     python ralph.py "Your task description"
-    python ralph.py --enhanced --final-review "Complex task"
+    python ralph.py --enhanced --skip-final-review "Complex task"
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from time import sleep
 
 
 # semver string
-VERSION = "0.0.9"
+VERSION = "0.0.10"
 
 
 # Configuration Constants
@@ -88,7 +88,7 @@ class RWLState:
     start_time: float = field(default=0.0)
     phase_history: list[str] = field(default_factory=list)
     last_error: str | None = field(default=None)
-    final_review_requested: bool = field(default=False)
+    final_review_requested: bool = field(default=True)
     is_complete: bool = field(default=False)
     mock_mode: bool = field(default=False)
     push_commits: bool = field(default=False)
@@ -1265,6 +1265,9 @@ def main_loop(state: RWLState) -> None:
                         if not commit_success:
                             handle_phase_failure(state, Phase.COMMIT.value, commit_result)
                     elif Path(REVIEW_REJECTED_FILE).exists():
+                        # prevent over-enthusiastic build phase from prematurely ending loop
+                        if check_for_completion(state):
+                            Path(COMPLETED_FILE).unlink()
                         plan_success, plan_result = execute_plan_phase(state)
                         state.phase_history.append(f"PLAN_{state.iteration}")
                         if not plan_success:
@@ -1339,7 +1342,7 @@ def parse_arguments() -> argparse.Namespace:
 Examples:
   %(prog)s "Build a web scraper for news articles"
   %(prog)s --enhanced "Create a REST API with tests"
-  %(prog)s --enhanced --final-review "Complex multi-module project"
+  %(prog)s --enhanced --skip-final-review "Complex multi-module project"
   %(prog)s --review-every 3 "Regular review cycles"
   %(prog)s --mock-mode "Test without external dependencies"
   %(prog)s --resume
@@ -1389,9 +1392,9 @@ for complex prompts."""
     )
 
     parser.add_argument(
-        "--final-review",
+        "--skip-final-review",
         action="store_true",
-        help="Run final REVIEW → BUILD → COMMIT cycle after completion"
+        help="Skip final REVIEW → BUILD → COMMIT cycle after completion"
     )
 
     parser.add_argument(
@@ -1531,7 +1534,7 @@ def main() -> int:
             model=args.model,
             review_model=args.review_model,
             max_iterations=args.max_iterations,
-            final_review_requested=args.final_review,
+            final_review_requested=not args.skip_final_review,
             mock_mode=args.mock_mode,
             start_time=time.time(),
             push_commits=args.push_commits,
