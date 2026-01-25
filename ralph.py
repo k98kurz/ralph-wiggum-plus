@@ -29,10 +29,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from string import Template
+from time import sleep
 
 
 # semver string
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 
 
 # Configuration Constants
@@ -45,6 +46,7 @@ PHASE_RETRY_LIMIT = int(os.getenv("RALPH_RETRY_LIMIT", 3))
 RETRY_WAIT_SECONDS = int(os.getenv("RALPH_RETRY_WAIT", 30))
 RECOVERY_WAIT_SECONDS = int(os.getenv("RALPH_RECOVERY_WAIT", 10))
 STALE_LOCK_TIMEOUT = int(os.getenv("RALPH_STALE_LOCK_TIMEOUT", 3600)) # 60 minutes
+FILESYSTEM_SYNC_DELAY = float(os.getenv("FILESYSTEM_SYNC_DELAY", 0.5))
 
 # Filename Constants
 STATE_FILE = ".ralph/state.json"
@@ -171,6 +173,7 @@ def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
 
 def archive_any_process_files(lock_token: str) -> None:
     """Check for and archive any intermediate files."""
+    sleep(FILESYSTEM_SYNC_DELAY) # wait for file system to sync
     for file_name in ARCHIVE_FILENAMES:
         archive_intermediate_file(Path(file_name), lock_token)
 
