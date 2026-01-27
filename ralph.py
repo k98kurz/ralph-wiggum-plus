@@ -7,13 +7,17 @@ through a structured four-phase cycle: BUILD-REVIEW-PLAN-COMMIT.
 
 Usage:
     python ralph.py "Your task description"
-    python ralph.py --enhanced --final-review "Complex task"
+    python ralph.py --enhanced --skip-final-review "Complex task"
 """
 
 from __future__ import annotations
-
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from pathlib import Path
+from string import Template
+from time import sleep, time
+from typing import Any, Callable, Generic, TypeVar
 import argparse
-import dataclasses
 import enum
 import hashlib
 import json
@@ -24,21 +28,15 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from string import Template
-from time import sleep
 
 
 # semver string
-VERSION = "0.0.9"
+VERSION = "0.0.11-dev"
 
 
 # Configuration Constants
-DEFAULT_MODEL = os.getenv("RALPH_MODEL", "opencode/grok-code")
-DEFAULT_REVIEW_MODEL = os.getenv("RALPH_REVIEW_MODEL", "opencode/grok-code")
+DEFAULT_MODEL = os.getenv("RALPH_MODEL", "opencode/big-pickle")
+DEFAULT_REVIEW_MODEL = os.getenv("RALPH_REVIEW_MODEL", "opencode/big-pickle")
 OPENCODE_TIMEOUT = int(os.getenv("RALPH_TIMEOUT", 1200)) # 20 minutes
 DEFAULT_MAX_ITERATIONS = int(os.getenv("RALPH_MAX_ITERATIONS", 20))
 DEFAULT_REVIEW_EVERY = int(os.getenv("RALPH_REVIEW_EVERY", 0))
@@ -60,6 +58,49 @@ IMPLEMENTATION_PLAN_FILE = "implementation_plan.md"
 PROGRESS_FILE = "progress.md"
 RECOVERY_NOTES_FILE = "recovery.notes.md"
 COMPLETED_FILE = "completed.md"
+
+# functional Result type stuff
+T = TypeVar('T')
+U = TypeVar('U')
+
+@dataclass
+class Ok(Generic[T]):
+    data: T
+    success: bool = True
+    def map(self, fn: Callable[[T], U]) -> Result[U]:
+        return try_except(fn, self.data)
+
+@dataclass
+class Err:
+    error: Exception
+    success: bool = False
+    def map(self, fn: Callable[..., object]) -> Err:
+        return self
+
+Result = Ok[T] | Err
+
+def success(data: T) -> Ok[T]:
+    return Ok(data)
+
+def failure(error: Exception) -> Err:
+    return Err(error)
+
+def try_except(fn: Callable[[...], T], *args, **kwargs) -> Result[T]:
+    try:
+        return success(fn(*args, **kwargs))
+    except Exception as e:
+        return failure(e)
+
+def pipe(
+        initial: Any,
+        *fns: Callable[[Result[T]], Result[T]]
+    ) -> Result[T]:
+    result = initial if isinstance(initial, (Ok, Err)) else success(initial)
+    for fn in fns:
+        if result.success:
+            result = fn(result)
+    return result
+
 
 class Phase(Enum):
     BUILD = "BUILD"
@@ -88,7 +129,7 @@ class RWLState:
     start_time: float = field(default=0.0)
     phase_history: list[str] = field(default_factory=list)
     last_error: str | None = field(default=None)
-    final_review_requested: bool = field(default=False)
+    final_review_requested: bool = field(default=True)
     is_complete: bool = field(default=False)
     mock_mode: bool = field(default=False)
     push_commits: bool = field(default=False)
@@ -161,7 +202,7 @@ def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
         archive_dir = Path(".ralph/archive")
         archive_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = int(time.time())
+        timestamp = int(time())
         archive_name = f"{timestamp}.{lock_token}.{file_path.name}"
         archive_path = archive_dir / archive_name
 
@@ -236,7 +277,9 @@ PROMPT_TEMPLATES = {}
 def get_template(template_name: str, state: RWLState, default: str) -> str:
     if template_name in PROMPT_TEMPLATES:
         template = PROMPT_TEMPLATES[template_name]
-        return template if not state.phase_recovered else (template + get_phase_recovery_template())
+        if not state.phase_recovered:
+            return template
+        return (template + get_phase_recovery_template())
 
     template_dir = Path('.ralph/templates')
     file_path = template_dir / f'{template_name}.md'
@@ -249,7 +292,9 @@ def get_template(template_name: str, state: RWLState, default: str) -> str:
         template = f.read()
         PROMPT_TEMPLATES[template_name] = template
     template = template or default
-    return template if not state.phase_recovered else (template + get_phase_recovery_template())
+    if not state.phase_recovered:
+        return template
+    return (template + get_phase_recovery_template())
 
 def get_phase_recovery_template() -> str:
     if 'phase_recovery' in PROMPT_TEMPLATES:
@@ -323,7 +368,7 @@ def get_project_lock() -> str | None:
 
             # Check if lock is stale (older than 1 hour)
             created_time = lock_data.get("created", 0)
-            if time.time() - created_time < STALE_LOCK_TIMEOUT:  # 1 hour
+            if time() - created_time < STALE_LOCK_TIMEOUT:  # 1 hour
                 print("ERROR: Project is locked by another RWL instance")
                 return None
             else:
@@ -339,7 +384,7 @@ def get_project_lock() -> str | None:
     # Create new lock
     import secrets
     token = secrets.token_hex(16)
-    timestamp = time.time()
+    timestamp = time()
     pid = os.getpid()
 
     lock_data = {
@@ -370,7 +415,7 @@ def check_project_lock(token: str) -> bool:
         valid = lock_data.get("lock_token") == token
         # update the timestamp if it is our lock, then return
         if valid:
-            lock_data["created"] = time.time()
+            lock_data["created"] = time()
             with open(lock_file, "w") as f:
                 json.dump(lock_data, f)
         return valid
@@ -422,32 +467,31 @@ def save_state_to_disk(state: RWLState) -> None:
 
     try:
         # Convert dataclass to dictionary, handling None values properly
-        state_dict = dataclasses.asdict(state)
+        state_dict = asdict(state)
 
         with open(state_file, "w") as f:
             json.dump(state_dict, f, indent=2)
     except Exception as e:
         print(f"WARNING: Error saving state: {e}")
 
-def load_state_from_disk() -> RWLState | None:
+def load_state_from_disk() -> Result[RWLState]:
     """Load state from disk for crash recovery."""
     state_file = Path(STATE_FILE)
 
     if not state_file.exists():
-        return None
+        return failure(Exception(f"state file {STATE_FILE} not found"))
 
-    try:
-        with open(state_file, "r") as f:
-            state_dict = json.load(f)
+    with open(state_file, "r") as f:
+        result = try_except(json.load, f)
+        if not result.success:
+            print(f"ERROR: failed to load state file: {result.error}")
+            return result
 
-        if not state_dict.get("original_prompt"):
+        if "original_prompt" not in result.data:
             print("ERROR: Saved state has no original prompt. Cannot resume.")
-            return None
+            return failure(Exception("Saved state has no original prompt. Cannot resume."))
 
-        return RWLState(**state_dict)
-    except (json.JSONDecodeError, TypeError, KeyError) as e:
-        print(f"ERROR: Corrupted state file: {e}")
-        return None
+        return success(RWLState(**result.data))
 
 
 def generate_initial_plan_prompt(state: RWLState) -> str:
@@ -798,11 +842,11 @@ def generate_recovery_prompt(state: RWLState) -> str:
 def call_opencode(
         prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
         mock_mode: bool = False
-    ) -> tuple[bool, str]:
+    ) -> Result[str]:
     """Call OpenCode with the given prompt and return success status and output."""
     if mock_mode:
         # Mock mode for testing
-        return True, f"MOCK RESPONSE for: {prompt[:100]}..."
+        return success(f"MOCK RESPONSE for: {prompt[:100]}...")
 
     try:
         cmd = ["opencode", "run", "--model", model]
@@ -820,134 +864,135 @@ def call_opencode(
         archive_any_process_files(lock_token)
 
         if result.returncode == 0:
-            return True, result.stdout
+            return success(result.stdout)
         else:
             error_msg = f"OpenCode failed with code {result.returncode}: {result.stderr}"
             print(f"ERROR: {error_msg}")
-            return False, error_msg
+            return failure(Exception(error_msg))
 
     except subprocess.TimeoutExpired:
         error_msg = f"OpenCode timed out after {timeout} seconds"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(TimeoutError(error_msg))
     except Exception as e:
         error_msg = f"Error calling OpenCode: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def generate_initial_plan(state: RWLState) -> tuple[bool, str]:
+def generate_initial_plan(state: RWLState) -> Result[str]:
     """Generate the initial implementation plan when none exists."""
     initial_plan_prompt = generate_initial_plan_prompt(state)
     plan_review_prompt = generate_plan_review_prompt(state)
     revise_plan_prompt = generate_revise_plan_prompt(state)
 
     # Execute the plan generation
-    success, result = call_opencode(
+    result = call_opencode(
         initial_plan_prompt, state.model, state.lock_token or "",
         timeout=state.timeout, mock_mode=state.mock_mode
     )
-    total_result = result
-    if not success:
-        return False, total_result
+    if not result.success:
+        return result
+    total_result = result.data
 
     # Now enter plan revision loop
     for _ in range(2):
-        success, result = call_opencode(
+        result = call_opencode(
             plan_review_prompt, state.review_model, state.lock_token or "",
             timeout=state.timeout, mock_mode=state.mock_mode
         )
-        total_result += f'\n\n{result}'
-        if not success:
-            return False, total_result
+        if not result.success:
+            return result
+        total_result += f'\n\n{result.data}'
+
         if not Path(PLAN_REVIEW_FILE).exists():
-            return True, total_result
-        success, result = call_opencode(
+            return success(total_result)
+
+        result = call_opencode(
             revise_plan_prompt, state.model, state.lock_token or "",
             timeout=state.timeout, mock_mode=state.mock_mode
         )
-        total_result += f'\n\n{result}'
-        if not success:
-            return False, total_result
+        if not result.success:
+            return result
+        total_result += f'\n\n{result.data}'
 
-    return True, total_result
+    return success(total_result)
 
 
-def execute_build_phase(state: RWLState) -> tuple[bool, str]:
+def execute_build_phase(state: RWLState) -> Result[str]:
     """Execute the BUILD phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting BUILD phase")
     state.current_phase = Phase.BUILD.value
+    save_state_to_disk(state)
 
     try:
         # Generate build prompt
         prompt = generate_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("BUILD phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"BUILD phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
+def execute_final_build_phase(state: RWLState) -> Result[str]:
     """Execute the final BUILD phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting final BUILD phase")
     state.current_phase = Phase.FINAL_BUILD.value
+    save_state_to_disk(state)
 
     try:
         # Generate build prompt
         prompt = generate_final_build_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("Final BUILD phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"Final BUILD phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
 def execute_review_phase(
         state: RWLState, is_final_review: bool = False,
         is_periodic_review: bool = False
-    ) -> tuple[bool, str]:
+    ) -> Result[str]:
     """Execute the REVIEW phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print("Starting REVIEW phase")
     state.current_phase = Phase.REVIEW.value
     if is_final_review:
         state.current_phase = Phase.FINAL_REVIEW.value
+    save_state_to_disk(state)
 
     try:
         # Wait for REQUEST_REVIEW_FILE in enhanced mode (for regular reviews)
@@ -955,9 +1000,9 @@ def execute_review_phase(
             request_file = Path(REQUEST_REVIEW_FILE)
             if not request_file.exists():
                 print(f"Waiting {RETRY_WAIT_SECONDS} seconds for {REQUEST_REVIEW_FILE}...")
-                time.sleep(RETRY_WAIT_SECONDS)
+                sleep(RETRY_WAIT_SECONDS)
                 if not request_file.exists():
-                    return False, f"{REQUEST_REVIEW_FILE} file not found"
+                    return failure(Exception(f"{REQUEST_REVIEW_FILE} file not found"))
 
         # Generate review prompt
         if is_final_review:
@@ -966,148 +1011,140 @@ def execute_review_phase(
             prompt = generate_review_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
-            # Verify that exactly one of the required files was created
-            if is_final_review:
-                expected_file = REVIEW_FINAL_FILE
-                created = Path(expected_file).exists()
-                if created:
-                    print("Final REVIEW phase completed successfully")
-                    return True, result
-                else:
-                    return False, f"Expected {expected_file} was not created"
-            else:
-                passed_exists = Path(REVIEW_PASSED_FILE).exists()
-                rejected_exists = Path(REVIEW_REJECTED_FILE).exists()
+        if not result.success:
+            return result
 
-                if passed_exists ^ rejected_exists:  # XOR - exactly one exists
-                    print("REVIEW phase completed successfully")
-                    return True, result
-                else:
-                    return False, "REVIEW phase must create exactly one of: "+\
-                        f"{REVIEW_PASSED_FILE}, {REVIEW_REJECTED_FILE}"
+        # Verify that exactly one of the required files was created
+        if is_final_review:
+            expected_file = REVIEW_FINAL_FILE
+            created = Path(expected_file).exists()
+            if created:
+                print("Final REVIEW phase completed successfully")
+                return result
+            else:
+                return failure(Exception(f"Expected {expected_file} was not created"))
         else:
-            return False, result
+            passed_exists = Path(REVIEW_PASSED_FILE).exists()
+            rejected_exists = Path(REVIEW_REJECTED_FILE).exists()
+
+            if passed_exists ^ rejected_exists:  # XOR - exactly one exists
+                print("REVIEW phase completed successfully")
+                return result
+            else:
+                return failure(Exception("REVIEW phase must create exactly one of: "+\
+                    f"{REVIEW_PASSED_FILE}, {REVIEW_REJECTED_FILE}"))
 
     except Exception as e:
         error_msg = f"REVIEW phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
+def execute_plan_phase(state: RWLState) -> Result[str]:
     """Execute the PLAN phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print("Starting PLAN phase")
     state.current_phase = Phase.PLAN.value
+    save_state_to_disk(state)
 
     try:
         # Generate plan prompt
         prompt = generate_plan_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             # Clean up REVIEW_REJECTED_FILE if it existed
             if Path(REVIEW_REJECTED_FILE).exists():
                 Path(REVIEW_REJECTED_FILE).unlink()
 
             print("PLAN phase completed successfully")
-            return True, result
-        else:
-            return False, result
 
+        return result
     except Exception as e:
         error_msg = f"PLAN phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
+def execute_commit_phase(state: RWLState) -> Result[str]:
     """Execute the COMMIT phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print("Starting COMMIT phase")
     state.current_phase = Phase.COMMIT.value
+    save_state_to_disk(state)
 
     try:
         if not Path(REVIEW_PASSED_FILE).exists():
-            return False, f"{REVIEW_PASSED_FILE} not found"
+            return failure(Exception(f"{REVIEW_PASSED_FILE} not found"))
 
         # Generate commit prompt
         prompt = generate_commit_prompt(state)
 
         # Execute via OpenCode
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             # Clean up REVIEW_PASSED_FILE
             if Path(REVIEW_PASSED_FILE).exists():
                 Path(REVIEW_PASSED_FILE).unlink()
-
             print("COMMIT phase completed successfully")
-            return True, result
-        else:
-            return False, result
 
+        return result
     except Exception as e:
         error_msg = f"COMMIT phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_recovery_phase(state: RWLState) -> tuple[bool, str]:
+def execute_recovery_phase(state: RWLState) -> Result[str]:
     """Execute the RECOVERY phase."""
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting RECOVERY phase for {state.failed_phase}")
     state.current_phase = Phase.RECOVERY.value
+    save_state_to_disk(state)
 
-    try:
-        # Wait briefly for transient issues to resolve
-        time.sleep(RECOVERY_WAIT_SECONDS)
+    # Wait briefly for transient issues to resolve
+    sleep(RECOVERY_WAIT_SECONDS)
 
-        # Generate recovery prompt
-        prompt = generate_recovery_prompt(state)
+    # Generate recovery prompt
+    prompt = try_except(generate_recovery_prompt, state)
+    if not prompt.success:
+        return prompt
 
-        # Execute via OpenCode
-        success, result = call_opencode(
-            prompt, state.model, state.lock_token or "", timeout=state.timeout,
-            mock_mode=state.mock_mode
-        )
+    # Execute via OpenCode
+    result = call_opencode(
+        prompt.data, state.model, state.lock_token or "", timeout=state.timeout,
+        mock_mode=state.mock_mode
+    )
 
-        if success:
-            print("RECOVERY phase completed successfully")
-            return True, result
-        else:
-            return False, result
-
-    except Exception as e:
-        error_msg = f"RECOVERY phase error: {e}"
-        print(f"ERROR: {error_msg}")
-        return False, error_msg
+    if result.success:
+        print("RECOVERY phase completed successfully")
+    return result
 
 
-def execute_final_review_phase(state: RWLState) -> tuple[bool, str]:
+def execute_final_review_phase(state: RWLState) -> Result[str]:
     """Execute the final REVIEW phase."""
     return execute_review_phase(state, is_final_review=True)
 
@@ -1128,7 +1165,7 @@ def should_trigger_review(state: RWLState) -> tuple[bool, bool]:
     return False, False
 
 
-def retry_failed_phase(state: RWLState, failed_phase: str) -> tuple[bool, str]:
+def retry_failed_phase(state: RWLState, failed_phase: str) -> Result[str]:
     """Retry the specific failed phase using the same execute functions."""
     if failed_phase == Phase.BUILD.value:
         return execute_build_phase(state)
@@ -1139,63 +1176,62 @@ def retry_failed_phase(state: RWLState, failed_phase: str) -> tuple[bool, str]:
     elif failed_phase == Phase.COMMIT.value:
         return execute_commit_phase(state)
     else:
-        return False, f"Invalid phase for retry: {failed_phase}"
+        return failure(Exception(f"Invalid phase for retry: {failed_phase}"))
 
 
-def handle_phase_failure(state: RWLState, failed_phase: str, error: str) -> tuple[bool, int]:
+def handle_phase_failure(
+        state: RWLState, failed_phase: str, error: Exception
+    ) -> Result[int]:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     # First check the lock
     if not state.lock_token or not check_project_lock(state.lock_token):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     state.failed_phase = failed_phase
-    state.last_error = error
+    state.last_error = str(error)
 
     # Log the failure
     log_path = Path(f".ralph/logs/errors.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as f:
-        f.write(f"{time.time()}: {failed_phase} failed: {error}\n")
+        f.write(f"{time()}: {failed_phase} failed: {error}\n")
 
     # Reset retry count and start recovery loop
     state.retry_count = 0
-    recovery_success, recovery_result = False, None
 
     # Enhanced mode: try recovery and retry until limit reached
     while state.enhanced_mode and state.retry_count < PHASE_RETRY_LIMIT:
         # Increment retry count at start of loop
         state.retry_count += 1
 
-        if not recovery_success:
-            print(f"Attempting RECOVERY phase for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
-            recovery_success, recovery_result = execute_recovery_phase(state)
+        print(f"Attempting RECOVERY phase for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
+        recovery_result = execute_recovery_phase(state)
 
-        if recovery_success:
+        if recovery_result.success:
             # Set phase_recovered flag for prompt generation
             state.phase_recovered = True
             print(f"Recovery successful, retrying {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
 
             # Retry the failed phase
-            retry_success, retry_result = retry_failed_phase(state, failed_phase)
+            retry_result = retry_failed_phase(state, failed_phase)
 
             # Reset phase_recovered flag after retry attempt
             state.phase_recovered = False
 
-            if retry_success:
+            if retry_result.success:
                 print(f"Phase retry {failed_phase} succeeded on attempt {state.retry_count}")
-                return True, state.retry_count
+                return success(state.retry_count)
             else:
                 print(f"Retry {state.retry_count} failed for {failed_phase}: {retry_result}")
-                error = retry_result  # Update error for next recovery attempt
         else:
             # Recovery failed - append recovery error and continue
             print(f"Recovery failed for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT}), trying again...")
-            error += f" | Recovery error: {recovery_result}"
+            state.last_error += f" | Recovery error: {recovery_result.error}"
             continue  # Loop back to increment retry_count and try recovery again
 
     print(f"Phase {failed_phase} failed after {state.retry_count} retry attempts")
-    return False, state.retry_count
+    return failure(Exception(f"Phase {failed_phase} failed after {state.retry_count} retry attempts"))
 
 
 def check_for_completion(state: RWLState) -> bool:
@@ -1203,7 +1239,7 @@ def check_for_completion(state: RWLState) -> bool:
     try:
         with open(COMPLETED_FILE, "r") as f:
             return True
-    except:
+    except Exception:
         return False
 
 
@@ -1216,36 +1252,100 @@ def run_final_review_cycle(state: RWLState) -> None:
     print("Running final review cycle...")
 
     # REVIEW phase
-    review_success, review_result = execute_final_review_phase(state)
-    if not review_success:
+    review_result = execute_final_review_phase(state)
+    if not review_result.success:
         print("Final review failed, exiting...")
         return
 
     # BUILD phase (address review concerns rather than task)
-    build_success, build_result = execute_final_build_phase(state)
-    if not build_success:
+    build_result = execute_final_build_phase(state)
+    if not build_result.success:
         print("Final build failed, exiting...")
         return
 
     # COMMIT phase
-    commit_success, commit_result = execute_commit_phase(state)
-    if not commit_success:
+    commit_result = execute_commit_phase(state)
+    if not commit_result.success:
         print("Final commit failed, exiting...")
         return
 
     print("Final review cycle completed successfully!")
 
 
+def resume_from_phase(state: RWLState) -> None:
+    """Resume execution from the saved phase."""
+    print(f"Resuming from phase: {state.current_phase}")
+
+    # Handle Recovery first
+    if state.current_phase == Phase.RECOVERY.value:
+        if state.failed_phase:
+            print(f"Resuming recovery for failed phase: {state.failed_phase}")
+            state.current_phase = state.failed_phase
+            save_state_to_disk(state)
+        else:
+            # Fallback if failed_phase missing
+            state.current_phase = Phase.BUILD.value
+
+    # Build Phase - Restart iteration
+    if state.current_phase == Phase.BUILD.value:
+        print("Resuming BUILD phase by restarting iteration...")
+        state.iteration -= 1
+        return
+
+    # Review Phase
+    if state.current_phase == Phase.REVIEW.value:
+        _, is_periodic = should_trigger_review(state)
+        result = execute_review_phase(state, is_periodic_review=is_periodic)
+
+        if result.success:
+            state.phase_history.append(f"REVIEW_{state.iteration}")
+            if Path(REVIEW_PASSED_FILE).exists():
+                state.current_phase = Phase.COMMIT.value
+                resume_from_phase(state)
+                return
+            elif Path(REVIEW_REJECTED_FILE).exists():
+                state.current_phase = Phase.PLAN.value
+                resume_from_phase(state)
+                return
+        else:
+            handle_phase_failure(state, Phase.REVIEW.value, result.error)
+            return
+
+    # Commit Phase
+    if state.current_phase == Phase.COMMIT.value:
+        result = execute_commit_phase(state)
+        state.phase_history.append(f"COMMIT_{state.iteration}")
+        if not result.success:
+            handle_phase_failure(state, Phase.COMMIT.value, result.error)
+        return
+
+    # Plan Phase
+    if state.current_phase == Phase.PLAN.value:
+        result = execute_plan_phase(state)
+        state.phase_history.append(f"PLAN_{state.iteration}")
+        if not result.success:
+            handle_phase_failure(state, Phase.PLAN.value, result.error)
+        return
+
+    # Final Review Cycle phases
+    if state.current_phase in [Phase.FINAL_BUILD.value, Phase.FINAL_REVIEW.value]:
+        print("Resuming Final Review Cycle...")
+        run_final_review_cycle(state)
+
+
 def main_loop(state: RWLState) -> None:
     """Main RWL loop orchestrating all phases."""
     save_state_to_disk(state)
 
+    if state.iteration > 0:
+        resume_from_phase(state)
+
     while state.iteration < state.max_iterations and not state.is_complete:
         state.iteration += 1
         # Always run BUILD phase
-        success, result = execute_build_phase(state)
-        if not success:
-            handle_phase_failure(state, Phase.BUILD.value, result)
+        result = execute_build_phase(state)
+        if not result.success:
+            handle_phase_failure(state, Phase.BUILD.value, result.error)
 
         state.phase_history.append(f"BUILD_{state.iteration}")
 
@@ -1254,33 +1354,36 @@ def main_loop(state: RWLState) -> None:
             # Either follow a REVIEW -> (PLAN/COMMIT) process or fallback to PLAN phase
             should_review, is_periodic_review = should_trigger_review(state)
             if should_review:
-                review_success, review_result = execute_review_phase(
+                review_result = execute_review_phase(
                     state, is_periodic_review=is_periodic_review
                 )
                 state.phase_history.append(f"REVIEW_{state.iteration}")
-                if review_success:
+                if review_result.success:
                     if Path(REVIEW_PASSED_FILE).exists():
-                        commit_success, commit_result = execute_commit_phase(state)
+                        commit_result = execute_commit_phase(state)
                         state.phase_history.append(f"COMMIT_{state.iteration}")
-                        if not commit_success:
-                            handle_phase_failure(state, Phase.COMMIT.value, commit_result)
+                        if not commit_result.success:
+                            handle_phase_failure(state, Phase.COMMIT.value, commit_result.error)
                     elif Path(REVIEW_REJECTED_FILE).exists():
-                        plan_success, plan_result = execute_plan_phase(state)
+                        # prevent over-enthusiastic build phase from prematurely ending loop
+                        if check_for_completion(state):
+                            Path(COMPLETED_FILE).unlink()
+                        plan_result = execute_plan_phase(state)
                         state.phase_history.append(f"PLAN_{state.iteration}")
-                        if not plan_success:
-                            handle_phase_failure(state, Phase.PLAN.value, plan_result)
+                        if not plan_result.success:
+                            handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
             else:
-                plan_success, plan_result = execute_plan_phase(state)
+                plan_result = execute_plan_phase(state)
                 state.phase_history.append(f"PLAN_{state.iteration}")
-                if not plan_success:
-                    handle_phase_failure(state, Phase.PLAN.value, plan_result)
+                if not plan_result.success:
+                    handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
 
         # Classic mode logic
         else:
-            plan_success, plan_result = execute_plan_phase(state)
+            plan_result = execute_plan_phase(state)
             state.phase_history.append(f"PLAN_{state.iteration}")
-            if not plan_success:
-                handle_phase_failure(state, Phase.PLAN.value, plan_result)
+            if not plan_result.success:
+                handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
 
         # Check for completion promise
         state.is_complete = check_for_completion(state)
@@ -1339,7 +1442,7 @@ def parse_arguments() -> argparse.Namespace:
 Examples:
   %(prog)s "Build a web scraper for news articles"
   %(prog)s --enhanced "Create a REST API with tests"
-  %(prog)s --enhanced --final-review "Complex multi-module project"
+  %(prog)s --enhanced --skip-final-review "Complex multi-module project"
   %(prog)s --review-every 3 "Regular review cycles"
   %(prog)s --mock-mode "Test without external dependencies"
   %(prog)s --resume
@@ -1389,9 +1492,9 @@ for complex prompts."""
     )
 
     parser.add_argument(
-        "--final-review",
+        "--skip-final-review",
         action="store_true",
-        help="Run final REVIEW → BUILD → COMMIT cycle after completion"
+        help="Skip final REVIEW → BUILD → COMMIT cycle after completion"
     )
 
     parser.add_argument(
@@ -1485,7 +1588,7 @@ def main() -> int:
                 with open(lock_file, "r") as f:
                     lock_data = json.load(f)
                 created_time = lock_data.get("created", 0)
-                if time.time() - created_time < STALE_LOCK_TIMEOUT:
+                if time() - created_time < STALE_LOCK_TIMEOUT:
                     print("ERROR: Lock file is not stale - another RWL process may be running. "
                           "Use --force-resume to override, or wait for the other process to release the lock.")
                     return 1
@@ -1503,7 +1606,7 @@ def main() -> int:
         if state.lock_token:
             populate_archived_hashes(state.lock_token)
         state.lock_token = None
-        state.start_time = time.time()
+        state.start_time = time()
     else:
         state = None
 
@@ -1531,9 +1634,9 @@ def main() -> int:
             model=args.model,
             review_model=args.review_model,
             max_iterations=args.max_iterations,
-            final_review_requested=args.final_review,
+            final_review_requested=not args.skip_final_review,
             mock_mode=args.mock_mode,
-            start_time=time.time(),
+            start_time=time(),
             push_commits=args.push_commits,
             original_prompt=prompt_content,
             timeout=args.timeout,
@@ -1555,9 +1658,9 @@ def main() -> int:
         # Check if implementation plan exists, create if needed
         if not Path(IMPLEMENTATION_PLAN_FILE).exists():
             print("No implementation plan found, generating...")
-            success, result = generate_initial_plan(state)
-            if not success:
-                print(f"ERROR: Failed to generate initial plan: {result}")
+            result = generate_initial_plan(state)
+            if not result.success:
+                print(f"ERROR: Failed to generate initial plan: {result.error}")
                 return 1
 
         # Validate prompt templates before starting main loop

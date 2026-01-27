@@ -33,7 +33,7 @@ Ralph is a single-file Python script. You can drop it anywhere in your `$PATH`
 ```text
 usage: ralph.py [-h] [--version] [--max-iterations MAX_ITERATIONS]
                 [--test-instructions TEST_INSTRUCTIONS]
-                [--review-every REVIEW_EVERY] [--enhanced] [--final-review]
+                [--review-every REVIEW_EVERY] [--enhanced] [--skip-final-review]
                 [--model MODEL] [--review-model REVIEW_MODEL]
                 [--timeout TIMEOUT] [--push-commits] [--mock-mode] [--resume]
                 [--force-resume] [--reorganize-archive]
@@ -54,10 +54,10 @@ options:
   --review-every REVIEW_EVERY
                         Trigger REVIEW phase every N iterations (default: 0, enhanced mode only)
   --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-COMMIT)
-  --final-review        Run final REVIEW → BUILD → COMMIT cycle after completion
-  --model MODEL         AI model to use for development (default: opencode/minimax-m2.1-free)
+  --skip-final-review   Skip final REVIEW → BUILD → COMMIT cycle after completion
+  --model MODEL         AI model to use for development (default: opencode/grok-code)
   --review-model REVIEW_MODEL
-                        AI model to use for reviews (default: opencode/big-pickle)
+                        AI model to use for reviews (default: opencode/grok-code)
   --timeout TIMEOUT     Timeout in seconds for OpenCode calls (default: 1200)
   --push-commits        Push commits to remote repository after successful commit
   --mock-mode           Use mock mode for testing (no external AI calls)
@@ -68,7 +68,7 @@ options:
 Examples:
   ralph.py "Build a web scraper for news articles"
   ralph.py --enhanced "Create a REST API with tests"
-  ralph.py --enhanced --final-review "Complex multi-module project"
+  ralph.py --enhanced --skip-final-review "Complex multi-module project"
   ralph.py --review-every 3 "Regular review cycles"
   ralph.py --mock-mode "Test without external dependencies"
   ralph.py --resume
