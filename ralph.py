@@ -881,6 +881,7 @@ def execute_build_phase(state: RWLState) -> tuple[bool, str]:
 
     print(f"Starting BUILD phase")
     state.current_phase = Phase.BUILD.value
+    save_state_to_disk(state)
 
     try:
         # Generate build prompt
@@ -912,6 +913,7 @@ def execute_final_build_phase(state: RWLState) -> tuple[bool, str]:
 
     print(f"Starting final BUILD phase")
     state.current_phase = Phase.FINAL_BUILD.value
+    save_state_to_disk(state)
 
     try:
         # Generate build prompt
@@ -948,6 +950,7 @@ def execute_review_phase(
     state.current_phase = Phase.REVIEW.value
     if is_final_review:
         state.current_phase = Phase.FINAL_REVIEW.value
+    save_state_to_disk(state)
 
     try:
         # Wait for REQUEST_REVIEW_FILE in enhanced mode (for regular reviews)
@@ -1008,6 +1011,7 @@ def execute_plan_phase(state: RWLState) -> tuple[bool, str]:
 
     print("Starting PLAN phase")
     state.current_phase = Phase.PLAN.value
+    save_state_to_disk(state)
 
     try:
         # Generate plan prompt
@@ -1043,6 +1047,7 @@ def execute_commit_phase(state: RWLState) -> tuple[bool, str]:
 
     print("Starting COMMIT phase")
     state.current_phase = Phase.COMMIT.value
+    save_state_to_disk(state)
 
     try:
         if not Path(REVIEW_PASSED_FILE).exists():
@@ -1081,6 +1086,7 @@ def execute_recovery_phase(state: RWLState) -> tuple[bool, str]:
 
     print(f"Starting RECOVERY phase for {state.failed_phase}")
     state.current_phase = Phase.RECOVERY.value
+    save_state_to_disk(state)
 
     try:
         # Wait briefly for transient issues to resolve
@@ -1236,9 +1242,73 @@ def run_final_review_cycle(state: RWLState) -> None:
     print("Final review cycle completed successfully!")
 
 
+def resume_from_phase(state: RWLState) -> None:
+    """Resume execution from the saved phase."""
+    print(f"Resuming from phase: {state.current_phase}")
+
+    # Handle Recovery first
+    if state.current_phase == Phase.RECOVERY.value:
+        if state.failed_phase:
+            print(f"Resuming recovery for failed phase: {state.failed_phase}")
+            state.current_phase = state.failed_phase
+            save_state_to_disk(state)
+        else:
+            # Fallback if failed_phase missing
+            state.current_phase = Phase.BUILD.value
+
+    # Build Phase - Restart iteration
+    if state.current_phase == Phase.BUILD.value:
+        print("Resuming BUILD phase by restarting iteration...")
+        state.iteration -= 1
+        return
+
+    # Review Phase
+    if state.current_phase == Phase.REVIEW.value:
+        _, is_periodic = should_trigger_review(state)
+        success, result = execute_review_phase(state, is_periodic_review=is_periodic)
+
+        if success:
+            state.phase_history.append(f"REVIEW_{state.iteration}")
+            if Path(REVIEW_PASSED_FILE).exists():
+                state.current_phase = Phase.COMMIT.value
+                resume_from_phase(state)
+                return
+            elif Path(REVIEW_REJECTED_FILE).exists():
+                state.current_phase = Phase.PLAN.value
+                resume_from_phase(state)
+                return
+        else:
+            handle_phase_failure(state, Phase.REVIEW.value, result)
+            return
+
+    # Commit Phase
+    if state.current_phase == Phase.COMMIT.value:
+        success, result = execute_commit_phase(state)
+        state.phase_history.append(f"COMMIT_{state.iteration}")
+        if not success:
+            handle_phase_failure(state, Phase.COMMIT.value, result)
+        return
+
+    # Plan Phase
+    if state.current_phase == Phase.PLAN.value:
+        success, result = execute_plan_phase(state)
+        state.phase_history.append(f"PLAN_{state.iteration}")
+        if not success:
+            handle_phase_failure(state, Phase.PLAN.value, result)
+        return
+
+    # Final Review Cycle phases
+    if state.current_phase in [Phase.FINAL_BUILD.value, Phase.FINAL_REVIEW.value]:
+        print("Resuming Final Review Cycle...")
+        run_final_review_cycle(state)
+
+
 def main_loop(state: RWLState) -> None:
     """Main RWL loop orchestrating all phases."""
     save_state_to_disk(state)
+
+    if state.iteration > 0:
+        resume_from_phase(state)
 
     while state.iteration < state.max_iterations and not state.is_complete:
         state.iteration += 1
