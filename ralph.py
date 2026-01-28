@@ -1573,11 +1573,12 @@ def main() -> int:
 
     # Handle resume mode
     if args.resume or args.force_resume:
-        loaded_state = load_state_from_disk()
-        if not loaded_state:
+        result = load_state_from_disk()
+        if not result.success:
             print("ERROR: Could not load state. Run without " +
                 f"{'--resume' if args.resume else '--force-resume'}.")
             return 1
+        loaded_state = result.data
 
         lock_file = Path("ralph.lock.json")
         if lock_file.exists():
