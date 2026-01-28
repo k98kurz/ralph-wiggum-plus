@@ -212,6 +212,24 @@
 - Fixed type errors with environment variable parsing (os.getenv -> int())
 - All path-related functions now use centralized constants and helper function
 
+## Current Task: COMPLETE_FILENAME_CONSTANTS
+
+### Learnings
+- Successfully replaced 4 hard-coded filename strings in main_loop() (lines 1252-1261)
+- Replaced `"review.accepted.md"` with `REVIEW_ACCEPTED_FILE` constant
+- Replaced `"review.rejected.md"` with `REVIEW_REJECTED_FILE` constant
+- All 35 unit tests pass after the changes
+- Remaining hard-coded strings (README.md, prompt.md) are either documentation files or outside per-research directory structure and don't need to be constants
+
+### Struggles
+- None
+
+### Remaining Work
+- COMPLETE_FILENAME_CONSTANTS task is complete
+- All hard-coded per-research filename strings replaced with constants
+- All tests pass successfully
+- Next task: VALIDATE_REFACTORED_CODE (final validation)
+
 ## Current Task: UPDATE_RESULT_TYPE_USAGE
 
 ### Learnings
@@ -242,3 +260,27 @@
 - Next tasks:
   - UPDATE_PHASE_EXECUTION_FUNCTIONS (dependent on UPDATE_RESULT_TYPE_USAGE)
   - UPDATE_ERROR_HANDLING_LOGIC (dependent on UPDATE_PHASE_EXECUTION_FUNCTIONS)
+
+## Current Task: VALIDATE_REFACTORED_CODE
+
+### Learnings
+- All 35 unit tests pass without modification
+- All refactoring preserves research.py-specific features:
+  - Per-research locks work exactly as before
+  - Per-research directory structure (.research/{name}/) is preserved
+  - Breadth-first search logic is unchanged
+  - Research-specific phases and prompts are unchanged
+  - Progress tracking and completion detection are unchanged
+- Template generation, archiving system, locking mechanism, and state management tests all pass
+- Mock mode tests pass
+- All hard-coded per-research filename strings replaced with constants
+- Only remaining hard-coded string is prompt.md which is a project root config file, not a per-research file
+
+### Struggles
+- None
+
+### Remaining Work
+- VALIDATE_REFACTORED_CODE task is complete
+- All acceptance criteria met
+- All tests pass successfully
+- All refactoring tasks are complete
