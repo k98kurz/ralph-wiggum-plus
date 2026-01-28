@@ -187,6 +187,7 @@ def populate_archived_hashes(lock_token: str) -> None:
         except Exception as e:
             print(f"WARNING: Could not read archive file {archive_file}: {e}")
 
+
 def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
     """Archive an intermediate file with a timestamp prefix if it hasn't been archived yet."""
     if not file_path.exists():
@@ -489,7 +490,9 @@ def load_state_from_disk() -> Result[RWLState]:
 
         if "original_prompt" not in result.data:
             print("ERROR: Saved state has no original prompt. Cannot resume.")
-            return failure(Exception("Saved state has no original prompt. Cannot resume."))
+            return failure(
+                Exception("Saved state has no original prompt. Cannot resume.")
+            )
 
         return success(RWLState(**result.data))
 
@@ -1220,18 +1223,23 @@ def handle_phase_failure(
             state.phase_recovered = False
 
             if retry_result.success:
-                print(f"Phase retry {failed_phase} succeeded on attempt {state.retry_count}")
+                print(f"Phase retry {failed_phase} succeeded on attempt " +
+                    f"{state.retry_count}")
                 return success(state.retry_count)
             else:
-                print(f"Retry {state.retry_count} failed for {failed_phase}: {retry_result}")
+                print(f"Retry {state.retry_count} failed for {failed_phase}: "+
+                    f"{retry_result}")
         else:
             # Recovery failed - append recovery error and continue
-            print(f"Recovery failed for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT}), trying again...")
+            print(f"Recovery failed for {failed_phase} (attempt "+
+                f"{state.retry_count}/{PHASE_RETRY_LIMIT}), trying again...")
             state.last_error += f" | Recovery error: {recovery_result.error}"
             continue  # Loop back to increment retry_count and try recovery again
 
     print(f"Phase {failed_phase} failed after {state.retry_count} retry attempts")
-    return failure(Exception(f"Phase {failed_phase} failed after {state.retry_count} retry attempts"))
+    return failure(Exception(
+        f"Phase {failed_phase} failed after {state.retry_count} retry attempts"
+    ))
 
 
 def check_for_completion(state: RWLState) -> bool:
@@ -1433,11 +1441,15 @@ def check_template_generation(state: RWLState) -> bool:
         try:
             generate_fn(state)
         except KeyError as e:
-            template_name = generate_fn.__name__.replace('generate_', '').replace('_prompt', '')
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
             print(f"ERROR: Template '{template_name}' has invalid variable: {e}")
             return False
         except Exception as e:
-            template_name = generate_fn.__name__.replace('generate_', '').replace('_prompt', '')
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
             print(f"ERROR: Template '{template_name}' failed to generate: {e}")
             return False
 
