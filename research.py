@@ -13,7 +13,12 @@ Usage:
 """
 
 from __future__ import annotations
-
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from string import Template
+from time import time, sleep
+from typing import Any, Callable, Generic, TypeVar
 import argparse
 import dataclasses
 import enum
@@ -26,25 +31,63 @@ import shutil
 import signal
 import subprocess
 import sys
-import time
-from dataclasses import dataclass, field
-from enum import Enum
-from pathlib import Path
-from string import Template
+
+# semver string
+VERSION = "0.0.1-dev"
 
 
-VERSION = "0.0.1"
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "opencode/big-pickle")
+DEFAULT_REVIEW_MODEL = os.getenv("DEFAULT_REVIEW_MODEL", "opencode/big-pickle")
+DEFAULT_BREADTH = int(os.getenv("DEFAULT_BREADTH", 3))
+DEFAULT_DEPTH = int(os.getenv("DEFAULT_DEPTH", 3))
+OPENCODE_TIMEOUT = int(os.getenv("OPENCODE_TIMEOUT", 1200))
+PHASE_RETRY_LIMIT = int(os.getenv("PHASE_RETRY_LIMIT", 3))
+RETRY_WAIT_SECONDS = int(os.getenv("RETRY_WAIT_SECONDS", 30))
+RECOVERY_WAIT_SECONDS = int(os.getenv("RECOVERY_WAIT_SECONDS", 10))
+STALE_LOCK_TIMEOUT = int(os.getenv("STALE_LOCK_TIMEOUT", 3600))
 
+# functional Result type stuff
+T = TypeVar('T')
+U = TypeVar('U')
 
-DEFAULT_MODEL = "opencode/minimax-m2.1-free"
-DEFAULT_REVIEW_MODEL = "opencode/big-pickle"
-DEFAULT_BREADTH = 3
-DEFAULT_DEPTH = 3
-OPENCODE_TIMEOUT = 1200
-PHASE_RETRY_LIMIT = 3
-RETRY_WAIT_SECONDS = 30
-RECOVERY_WAIT_SECONDS = 10
-STALE_LOCK_TIMEOUT = 3600
+@dataclass
+class Ok(Generic[T]):
+    data: T
+    success: bool = True
+    def map(self, fn: Callable[[T], U]) -> Result[U]:
+        return try_except(fn, self.data)
+
+@dataclass
+class Err:
+    error: Exception
+    success: bool = False
+    def map(self, fn: Callable[..., object]) -> Err:
+        return self
+
+Result = Ok[T] | Err
+
+def success(data: T) -> Ok[T]:
+    return Ok(data)
+
+def failure(error: Exception) -> Err:
+    return Err(error)
+
+def try_except(fn: Callable[[...], T], *args, **kwargs) -> Result[T]: # type: ignore
+    try:
+        return success(fn(*args, **kwargs))
+    except Exception as e:
+        return failure(e) # type: ignore
+
+def pipe(
+        initial: Any,
+        *fns: Callable[[Result[T]], Result[T]]
+    ) -> Result[T]:
+    result = initial if isinstance(initial, (Ok, Err)) else success(initial)
+    for fn in fns:
+        if result.success:
+            result = fn(result)
+    return result
+
 
 
 class Phase(Enum):
@@ -112,10 +155,31 @@ def setup_signal_handlers(state: RWRState) -> None:
 
 def setup_logging(research_name: str) -> None:
     """Set up logging directory structure."""
-    logs_dir = Path(f".research/{research_name}/logs")
+    logs_dir = get_research_path(research_name, LOGS_DIR)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
 
+# Directory Constants
+RESEARCH_DIR = ".research"
+
+# Filename Constants
+STATE_FILE = "state.json"
+LOCK_FILE = "research.lock.json"
+RESEARCH_PLAN_FILE = "research_plan.md"
+PROGRESS_FILE = "progress.md"
+REVIEW_ACCEPTED_FILE = "review.accepted.md"
+REVIEW_REJECTED_FILE = "review.rejected.md"
+RECOVERY_NOTES_FILE = "recovery.notes.md"
+COMPLETED_FILE = "completed.md"
+
+# Subdirectory Constants
+ARCHIVE_DIR = "archive"
+LOGS_DIR = "logs"
+TEMPLATES_DIR = "templates"
+PROGRESS_DIR = "progress"
+REPORTS_DIR = "reports"
+
+# Archive Constants
 ARCHIVED_HASHES: set[str] = set()
 
 ARCHIVE_FILENAMES = [
@@ -131,9 +195,14 @@ ARCHIVE_FILENAMES = [
 ARCHIVE_FILE_FORMAT = re.compile(r"^(\d+)\.([a-f0-9]{32})\.(.+)$")
 
 
+def get_research_path(research_name: str, *path_parts: str) -> Path:
+    """Generate per-research path preserving existing directory structure."""
+    return Path(f"{RESEARCH_DIR}/{research_name}", *path_parts)
+
+
 def populate_archived_hashes(state: RWRState) -> None:
     """Populate the in-memory hash set from existing archives for this token."""
-    archive_dir = Path(f".research/{state.research_name}/archive")
+    archive_dir = get_research_path(state.research_name, ARCHIVE_DIR)
     if not archive_dir.exists():
         return
 
@@ -158,10 +227,10 @@ def archive_intermediate_file(file_path: Path, state: RWRState, prepend: str = "
         if file_hash in ARCHIVED_HASHES:
             return
 
-        archive_dir = Path(f".research/{state.research_name}/archive")
+        archive_dir = get_research_path(state.research_name, ARCHIVE_DIR)
         archive_dir.mkdir(parents=True, exist_ok=True)
 
-        timestamp = int(time.time())
+        timestamp = int(time())
         original_name = file_path.name
         if prepend:
             original_name = f"{prepend}.{original_name}"
@@ -177,11 +246,11 @@ def archive_intermediate_file(file_path: Path, state: RWRState, prepend: str = "
 
 def archive_any_process_files(state: RWRState) -> None:
     """Check for and archive any intermediate files."""
-    file_dir = Path(f".research/{state.research_name}")
+    file_dir = get_research_path(state.research_name)
     for file_name in ARCHIVE_FILENAMES:
         archive_intermediate_file(file_dir / file_name, state)
 
-    progress_dir = Path(f".research/{state.research_name}/progress")
+    progress_dir = get_research_path(state.research_name, PROGRESS_DIR)
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
             if progress_file.name != "README.md":
@@ -195,7 +264,7 @@ def reorganize_archive_files(state: RWRState, current_token: str | None = None) 
     Skips files matching the current lock token to allow active sessions to continue.
     Only reorganizes sessions with 2 or more files.
     """
-    archive_dir = Path(f".research/{state.research_name}/archive")
+    archive_dir = get_research_path(state.research_name, ARCHIVE_DIR)
     if not archive_dir.exists():
         return
 
@@ -251,7 +320,7 @@ def get_template(template_name: str, state: RWRState, default: str) -> str:
         template = PROMPT_TEMPLATES[template_name]
         return template if not state.phase_recovered else (template + get_phase_recovery_template())
 
-    template_dir = Path(f'.research/{state.research_name}/templates')
+    template_dir = get_research_path(state.research_name, TEMPLATES_DIR)
     os.makedirs(template_dir, exist_ok=True)
 
     file_path = template_dir / f'{template_name}.md'
@@ -268,7 +337,7 @@ def get_template(template_name: str, state: RWRState, default: str) -> str:
 
 def get_global_template(template_name: str, default: str) -> str:
     """Get template from global .research/templates directory."""
-    template_dir = Path('.research/templates')
+    template_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
     os.makedirs(template_dir, exist_ok=True)
 
     file_path = template_dir / f'{template_name}.md'
@@ -285,7 +354,7 @@ def get_phase_recovery_template() -> str:
     if 'phase_recovery' in PROMPT_TEMPLATES:
         return PROMPT_TEMPLATES['phase_recovery']
 
-    template_dir = Path('.research/templates')
+    template_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
     os.makedirs(template_dir, exist_ok=True)
     default = '\nThe previous attempt to run this phase failed. Read ' +\
         ' recovery.notes.md for phase recovery information.'
@@ -331,20 +400,20 @@ def validate_environment(research_name: str) -> None:
         print("ERROR: This directory is not a git repository")
         sys.exit(1)
 
-    research_dir = Path(f".research/{research_name}")
+    research_dir = get_research_path(research_name)
     try:
         research_dir.mkdir(parents=True, exist_ok=True)
     except Exception as e:
-        print(f"ERROR: Cannot create .research/{research_name} directory: {e}")
+        print(f"ERROR: Cannot create {get_research_path(research_name)} directory: {e}")
         sys.exit(1)
 
 
 def get_project_lock(research_name: str, force_resume: bool = False) -> str | None:
     """Create a project lock file and return the lock token."""
-    research_dir = Path(f".research/{research_name}")
+    research_dir = get_research_path(research_name)
     research_dir.mkdir(parents=True, exist_ok=True)
 
-    lock_file = research_dir / "research.lock.json"
+    lock_file = research_dir / LOCK_FILE
 
     if lock_file.exists():
         try:
@@ -352,7 +421,7 @@ def get_project_lock(research_name: str, force_resume: bool = False) -> str | No
                 lock_data = json.load(f)
 
             created_time = lock_data.get("created", 0)
-            if time.time() - created_time < STALE_LOCK_TIMEOUT:
+            if time() - created_time < STALE_LOCK_TIMEOUT:
                 if force_resume:
                     print("WARNING: Force resuming, removing stale lock file")
                     lock_file.unlink()
@@ -371,7 +440,7 @@ def get_project_lock(research_name: str, force_resume: bool = False) -> str | No
 
     import secrets
     token = secrets.token_hex(16)
-    timestamp = time.time()
+    timestamp = time()
     pid = os.getpid()
 
     lock_data = {
@@ -391,7 +460,7 @@ def get_project_lock(research_name: str, force_resume: bool = False) -> str | No
 
 def check_project_lock(state: RWRState) -> bool:
     """Check if the project lock is still valid."""
-    lock_file = Path(f".research/{state.research_name}/research.lock.json")
+    lock_file = get_research_path(state.research_name, LOCK_FILE)
 
     if not lock_file.exists():
         return False
@@ -402,7 +471,7 @@ def check_project_lock(state: RWRState) -> bool:
 
         valid = lock_data.get("lock_token") == state.lock_token
         if valid:
-            lock_data["created"] = time.time()
+            lock_data["created"] = time()
             with open(lock_file, "w") as f:
                 json.dump(lock_data, f)
         return valid
@@ -415,7 +484,7 @@ def release_project_lock(state: RWRState) -> None:
     if not state.lock_token:
         return
 
-    lock_file = Path(f".research/{state.research_name}/research.lock.json")
+    lock_file = get_research_path(state.research_name, LOCK_FILE)
 
     try:
         if lock_file.exists():
@@ -436,7 +505,7 @@ def cleanup_process_files(state: RWRState) -> None:
         *ARCHIVE_FILENAMES
     ]
 
-    research_dir = Path(f".research/{state.research_name}")
+    research_dir = get_research_path(state.research_name)
     for file_path in files_to_remove:
         path = research_dir / file_path
         if path.exists():
@@ -459,7 +528,7 @@ def cleanup_process_files(state: RWRState) -> None:
 
 def save_state_to_disk(state: RWRState) -> None:
     """Save the current state to disk for crash recovery."""
-    state_file = Path(f".research/{state.research_name}/state.json")
+    state_file = get_research_path(state.research_name, STATE_FILE)
 
     try:
         state_dict = dataclasses.asdict(state)
@@ -472,7 +541,7 @@ def save_state_to_disk(state: RWRState) -> None:
 
 def load_state_from_disk(research_name: str) -> RWRState | None:
     """Load state from disk for crash recovery."""
-    state_file = Path(f".research/{research_name}/state.json")
+    state_file = get_research_path(research_name, STATE_FILE)
 
     if not state_file.exists():
         return None
@@ -493,15 +562,15 @@ def load_state_from_disk(research_name: str) -> RWRState | None:
 
 def create_research_directory_structure(research_name: str, original_topic: str, breadth: int, depth: int) -> None:
     """Create the .research/{name}/ directory structure with all required subdirectories and files."""
-    research_dir = Path(f".research/{research_name}")
+    research_dir = get_research_path(research_name)
     research_dir.mkdir(parents=True, exist_ok=True)
 
-    (research_dir / "archive").mkdir(exist_ok=True)
-    (research_dir / "progress").mkdir(exist_ok=True)
-    (research_dir / "templates").mkdir(exist_ok=True)
-    (research_dir / "logs").mkdir(exist_ok=True)
+    (research_dir / ARCHIVE_DIR).mkdir(exist_ok=True)
+    (research_dir / PROGRESS_DIR).mkdir(exist_ok=True)
+    (research_dir / TEMPLATES_DIR).mkdir(exist_ok=True)
+    (research_dir / LOGS_DIR).mkdir(exist_ok=True)
 
-    reports_dir = Path(f"reports/{research_name}")
+    reports_dir = Path(REPORTS_DIR) / research_name
     reports_dir.mkdir(parents=True, exist_ok=True)
 
     lock_data = {
@@ -509,7 +578,7 @@ def create_research_directory_structure(research_name: str, original_topic: str,
         "created": 0,
         "pid": 0
     }
-    lock_file = research_dir / "research.lock.json"
+    lock_file = research_dir / LOCK_FILE
     with open(lock_file, "w") as f:
         json.dump(lock_data, f)
 
@@ -519,7 +588,7 @@ def create_research_directory_structure(research_name: str, original_topic: str,
         depth=depth,
         max_iterations=calculate_min_iterations(breadth, depth),
         research_name=research_name,
-        start_time=time.time()
+        start_time=time()
     )
     save_state_to_disk(state)
 
@@ -532,7 +601,7 @@ def create_research_directory_structure(research_name: str, original_topic: str,
 ## Recent Activity
 - Research session initialized for: {original_topic}
 """
-    progress_file = research_dir / "progress.md"
+    progress_file = research_dir / PROGRESS_FILE
     with open(progress_file, "w") as f:
         f.write(progress_content)
 
@@ -540,17 +609,17 @@ def create_research_directory_structure(research_name: str, original_topic: str,
     with open(readme_file, "w") as f:
         f.write("# Progress Directory\n\nPer-topic progress files will be stored here.\n")
 
-    print(f"Created research directory structure: .research/{research_name}/")
-    print(f"Created reports directory: reports/{research_name}/")
+    print(f"Created research directory structure: {get_research_path(research_name)}/")
+    print(f"Created reports directory: {Path(REPORTS_DIR) / research_name}/")
 
 
 def call_opencode(
         prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
         mock_mode: bool = False
-    ) -> tuple[bool, str]:
+    ) -> Result[str]:
     """Call OpenCode with the given prompt and return success status and output."""
     if mock_mode:
-        return True, f"MOCK RESPONSE for: {prompt[:100]}..."
+        return success(f"MOCK RESPONSE for: {prompt[:100]}...")
 
     try:
         cmd = ["opencode", "run", "--model", model]
@@ -566,20 +635,20 @@ def call_opencode(
         )
 
         if result.returncode == 0:
-            return True, result.stdout
+            return success(result.stdout)
         else:
             error_msg = f"OpenCode failed with code {result.returncode}: {result.stderr}"
             print(f"ERROR: {error_msg}")
-            return False, error_msg
+            return failure(Exception(error_msg))
 
     except subprocess.TimeoutExpired:
         error_msg = f"OpenCode timed out after {timeout} seconds"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(TimeoutError(error_msg))
     except Exception as e:
         error_msg = f"Error calling OpenCode: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
 def generate_initial_plan_prompt(state: RWRState) -> str:
@@ -856,10 +925,10 @@ def generate_recovery_prompt(state: RWRState) -> str:
     return interpolate_template(template, state)
 
 
-def execute_research_phase(state: RWRState) -> tuple[bool, str]:
+def execute_research_phase(state: RWRState) -> Result[str]:
     """Execute the RESEARCH phase."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting RESEARCH phase")
     state.current_phase = Phase.RESEARCH.value
@@ -867,27 +936,25 @@ def execute_research_phase(state: RWRState) -> tuple[bool, str]:
     try:
         prompt = generate_research_prompt(state)
 
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("RESEARCH phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"RESEARCH phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_review_phase(state: RWRState, is_final: bool = False) -> tuple[bool, str]:
+def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]:
     """Execute the REVIEW phase."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting {'FINAL ' if is_final else ''}REVIEW phase")
     state.current_phase = Phase.FINAL_REVIEW.value if is_final else Phase.REVIEW.value
@@ -898,43 +965,42 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> tuple[bool,
         else:
             prompt = generate_review_prompt(state)
 
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             if is_final:
                 accepted_exists = Path("review.accepted.md").exists()
                 rejected_exists = Path("review.rejected.md").exists()
 
                 if accepted_exists ^ rejected_exists:
                     print("FINAL REVIEW phase completed successfully")
-                    return True, result
+                    return result
                 else:
-                    return False, "FINAL REVIEW must create exactly one of: review.accepted.md, review.rejected.md"
+                    return failure(Exception("FINAL REVIEW must create exactly one of: review.accepted.md, review.rejected.md"))
             else:
                 accepted_exists = Path("review.accepted.md").exists()
                 rejected_exists = Path("review.rejected.md").exists()
 
                 if accepted_exists ^ rejected_exists:
                     print("REVIEW phase completed successfully")
-                    return True, result
+                    return result
                 else:
-                    return False, "REVIEW phase must create exactly one of: review.accepted.md, review.rejected.md"
-        else:
-            return False, result
+                    return failure(Exception("REVIEW phase must create exactly one of: review.accepted.md, review.rejected.md"))
+        return result
 
     except Exception as e:
         error_msg = f"REVIEW phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_synthesize_phase(state: RWRState) -> tuple[bool, str]:
+def execute_synthesize_phase(state: RWRState) -> Result[str]:
     """Execute the SYNTHESIZE phase."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print("Starting SYNTHESIZE phase")
     state.current_phase = Phase.SYNTHESIZE.value
@@ -942,27 +1008,25 @@ def execute_synthesize_phase(state: RWRState) -> tuple[bool, str]:
     try:
         prompt = generate_synthesize_prompt(state)
 
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("SYNTHESIZE phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"SYNTHESIZE phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_revise_phase(state: RWRState) -> tuple[bool, str]:
+def execute_revise_phase(state: RWRState) -> Result[str]:
     """Execute the REVISE phase."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print("Starting REVISE phase")
     state.current_phase = Phase.REVISE.value
@@ -970,54 +1034,50 @@ def execute_revise_phase(state: RWRState) -> tuple[bool, str]:
     try:
         prompt = generate_revise_prompt(state)
 
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("REVISE phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"REVISE phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def execute_recovery_phase(state: RWRState) -> tuple[bool, str]:
+def execute_recovery_phase(state: RWRState) -> Result[str]:
     """Execute the RECOVERY phase."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     print(f"Starting RECOVERY phase for {state.failed_phase}")
     state.current_phase = Phase.RECOVERY.value
 
     try:
-        time.sleep(RECOVERY_WAIT_SECONDS)
+        sleep(RECOVERY_WAIT_SECONDS)
 
         prompt = generate_recovery_prompt(state)
 
-        success, result = call_opencode(
+        result = call_opencode(
             prompt, state.model, state.lock_token or "", timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
-        if success:
+        if result.success:
             print("RECOVERY phase completed successfully")
-            return True, result
-        else:
-            return False, result
+        return result
 
     except Exception as e:
         error_msg = f"RECOVERY phase error: {e}"
         print(f"ERROR: {error_msg}")
-        return False, error_msg
+        return failure(Exception(error_msg))
 
 
-def retry_failed_phase(state: RWRState, failed_phase: str) -> tuple[bool, str]:
+def retry_failed_phase(state: RWRState, failed_phase: str) -> Result[str]:
     """Retry the specific failed phase."""
     if failed_phase == Phase.RESEARCH.value:
         return execute_research_phase(state)
@@ -1030,60 +1090,60 @@ def retry_failed_phase(state: RWRState, failed_phase: str) -> tuple[bool, str]:
     elif failed_phase == Phase.REVISE.value:
         return execute_revise_phase(state)
     else:
-        return False, f"Invalid phase for retry: {failed_phase}"
+        return failure(Exception(f"Invalid phase for retry: {failed_phase}"))
 
 
-def handle_phase_failure(state: RWRState, failed_phase: str, error: str) -> tuple[bool, int]:
+def handle_phase_failure(state: RWRState, failed_phase: str, error: str) -> Result[str]:
     """Handle phase failure with retry logic and recovery."""
     print(f"ERROR: {failed_phase} phase failed: {error}")
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        return failure(Exception('lost the lock; aborting loop'))
 
     state.failed_phase = failed_phase
     state.last_error = error
 
-    log_path = Path(f".research/{state.research_name}/logs/errors.log")
+    log_path = get_research_path(state.research_name, LOGS_DIR, "errors.log")
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, "a") as f:
-        f.write(f"{time.time()}: {failed_phase} failed: {error}\n")
+        f.write(f"{time()}: {failed_phase} failed: {error}\n")
 
     state.retry_count = 0
-    recovery_success, recovery_result = False, None
+    recovery_result = None
 
     while state.retry_count < PHASE_RETRY_LIMIT:
         state.retry_count += 1
 
-        if not recovery_success:
+        if recovery_result is None or not recovery_result.success:
             print(f"Attempting RECOVERY phase for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
-            recovery_success, recovery_result = execute_recovery_phase(state)
+            recovery_result = execute_recovery_phase(state)
 
-        if recovery_success:
+        if recovery_result.success:
             state.phase_recovered = True
             print(f"Recovery successful, retrying {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT})...")
 
-            retry_success, retry_result = retry_failed_phase(state, failed_phase)
+            retry_result = retry_failed_phase(state, failed_phase)
 
             state.phase_recovered = False
 
-            if retry_success:
+            if retry_result.success:
                 print(f"Phase retry {failed_phase} succeeded on attempt {state.retry_count}")
-                return True, state.retry_count
+                return success(f"Phase {failed_phase} recovered on attempt {state.retry_count}")
             else:
-                print(f"Retry {state.retry_count} failed for {failed_phase}: {retry_result}")
-                error = retry_result
+                print(f"Retry {state.retry_count} failed for {failed_phase}: {retry_result.error}")
+                error = str(retry_result.error)
         else:
             print(f"Recovery failed for {failed_phase} (attempt {state.retry_count}/{PHASE_RETRY_LIMIT}), trying again...")
-            error += f" | Recovery error: {recovery_result}"
+            error += f" | Recovery error: {recovery_result.error if isinstance(recovery_result, Err) else 'Unknown error'}"
             continue
 
     print(f"Phase {failed_phase} failed after {state.retry_count} retry attempts")
-    return False, state.retry_count
+    return failure(Exception(f"Phase {failed_phase} failed after {state.retry_count} attempts: {error}"))
 
 
 def check_for_completion(state: RWRState) -> bool:
     """Check for the completed.md file."""
     try:
-        completed_file = Path(f".research/{state.research_name}/completed.md")
+        completed_file = get_research_path(state.research_name, COMPLETED_FILE)
         if completed_file.exists():
             return True
     except:
@@ -1094,7 +1154,7 @@ def check_for_completion(state: RWRState) -> bool:
 def check_all_topics_complete(research_name: str) -> bool:
     """Check if all topics in research_plan.md are marked Complete."""
     try:
-        plan_file = Path(f".research/{research_name}/research_plan.md")
+        plan_file = get_research_path(research_name, RESEARCH_PLAN_FILE)
         if not plan_file.exists():
             return False
 
@@ -1111,7 +1171,7 @@ def check_all_topics_complete(research_name: str) -> bool:
 def get_completion_stats(state: RWRState) -> tuple[int, int]:
     """Get completion statistics from research_plan.md."""
     try:
-        plan_file = Path(f".research/{state.research_name}/research_plan.md")
+        plan_file = get_research_path(state.research_name, RESEARCH_PLAN_FILE)
         if not plan_file.exists():
             return 0, 0
 
@@ -1127,28 +1187,29 @@ def get_completion_stats(state: RWRState) -> tuple[int, int]:
 def run_final_cycle(state: RWRState) -> None:
     """Run SYNTHESIZE → REVIEW → REVISE final cycle."""
     if not state.lock_token or not check_project_lock(state):
-        raise Exception('lost the lock; aborting loop')
+        print("Lost the lock; aborting final cycle")
+        return
 
     print("Running final SYNTHESIZE-REVIEW-REVISE cycle...")
 
-    synthesize_success, synthesize_result = execute_synthesize_phase(state)
-    if not synthesize_success:
+    synthesize_result = execute_synthesize_phase(state)
+    if not synthesize_result.success:
         print("SYNTHESIZE phase failed, exiting...")
         return
 
-    review_success, review_result = execute_review_phase(state, is_final=True)
-    if not review_success:
+    review_result = execute_review_phase(state, is_final=True)
+    if not review_result.success:
         print("FINAL REVIEW phase failed, exiting...")
         return
 
     if Path("review.rejected.md").exists():
-        revise_success, revise_result = execute_revise_phase(state)
-        if not revise_success:
+        revise_result = execute_revise_phase(state)
+        if not revise_result.success:
             print("REVISE phase failed, exiting...")
             return
 
-        review_success_2, review_result_2 = execute_review_phase(state, is_final=True)
-        if not review_success_2:
+        review_result_2 = execute_review_phase(state, is_final=True)
+        if not review_result_2.success:
             print("FINAL REVIEW phase after revision failed, exiting...")
             return
 
@@ -1172,14 +1233,14 @@ This report was generated before all research topics were completed due to reach
 def main_loop(state: RWRState) -> None:
     """Main RWR loop orchestrating research phases."""
     save_state_to_disk(state)
-    path_dir = Path(f".research/{state.research_name}")
+    path_dir = get_research_path(state.research_name)
 
     while state.iteration < state.max_iterations and not state.is_complete:
         state.iteration += 1
 
-        success, result = execute_research_phase(state)
-        if not success:
-            handle_phase_failure(state, Phase.RESEARCH.value, result)
+        result = execute_research_phase(state)
+        if not result.success:
+            handle_phase_failure(state, Phase.RESEARCH.value, str(result.error))
 
         state.phase_history.append(f"RESEARCH_{state.iteration}")
         save_state_to_disk(state)
@@ -1195,10 +1256,10 @@ def main_loop(state: RWRState) -> None:
             except Exception as e:
                 print(f"WARNING: Could not delete review.rejected.md: {e}")
 
-        review_success, review_result = execute_review_phase(state)
+        review_result = execute_review_phase(state)
         state.phase_history.append(f"REVIEW_{state.iteration}")
-        if not review_success:
-            handle_phase_failure(state, Phase.REVIEW.value, review_result)
+        if not review_result.success:
+            handle_phase_failure(state, Phase.REVIEW.value, str(review_result.error))
 
         state.is_complete = check_for_completion(state)
         save_state_to_disk(state)
@@ -1374,7 +1435,7 @@ def main() -> int:
 
     if args.reorganize_archive:
         minimal_state = RWRState(research_name=args.name, lock_token=None)
-        lock_file = Path(f".research/{args.name}/research.lock.json")
+        lock_file = get_research_path(args.name, LOCK_FILE)
         if lock_file.exists():
             try:
                 with open(lock_file, "r") as f:
@@ -1405,7 +1466,7 @@ def main() -> int:
             return 1
 
         if args.force_resume:
-            lock_file = Path(f".research/{args.name}/research.lock.json")
+            lock_file = get_research_path(args.name, LOCK_FILE)
             if lock_file.exists():
                 lock_file.unlink()
 
@@ -1452,7 +1513,7 @@ def main() -> int:
             model=args.model,
             review_model=args.review_model,
             lock_token=lock_token,
-            start_time=time.time(),
+            start_time=time(),
             mock_mode=args.mock_mode,
             timeout=args.timeout,
             research_name=args.name,
@@ -1479,13 +1540,13 @@ def main() -> int:
         print("\nGenerating initial research plan...")
 
         initial_plan_prompt = generate_initial_plan_prompt(state)
-        success, result = call_opencode(
+        result = call_opencode(
             initial_plan_prompt, state.model, state.lock_token or "",
             timeout=state.timeout, mock_mode=state.mock_mode
         )
 
-        if not success:
-            print(f"ERROR: Failed to generate initial plan: {result}")
+        if not result.success:
+            print(f"ERROR: Failed to generate initial plan: {result.error}")
             return 1
 
     save_state_to_disk(state)

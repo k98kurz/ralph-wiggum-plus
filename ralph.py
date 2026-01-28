@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.11-dev"
+VERSION = "0.0.11-dev2"
 
 
 # Configuration Constants
@@ -1345,6 +1345,8 @@ def main_loop(state: RWLState) -> None:
         # Always run BUILD phase
         result = execute_build_phase(state)
         if not result.success:
+            if 'lost the lock' in str(result.error):
+                return
             handle_phase_failure(state, Phase.BUILD.value, result.error)
 
         state.phase_history.append(f"BUILD_{state.iteration}")
@@ -1363,6 +1365,8 @@ def main_loop(state: RWLState) -> None:
                         commit_result = execute_commit_phase(state)
                         state.phase_history.append(f"COMMIT_{state.iteration}")
                         if not commit_result.success:
+                            if 'lost the lock' in str(result.error):
+                                return
                             handle_phase_failure(state, Phase.COMMIT.value, commit_result.error)
                     elif Path(REVIEW_REJECTED_FILE).exists():
                         # prevent over-enthusiastic build phase from prematurely ending loop
@@ -1371,11 +1375,15 @@ def main_loop(state: RWLState) -> None:
                         plan_result = execute_plan_phase(state)
                         state.phase_history.append(f"PLAN_{state.iteration}")
                         if not plan_result.success:
+                            if 'lost the lock' in str(result.error):
+                                return
                             handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
             else:
                 plan_result = execute_plan_phase(state)
                 state.phase_history.append(f"PLAN_{state.iteration}")
                 if not plan_result.success:
+                    if 'lost the lock' in str(result.error):
+                        return
                     handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
 
         # Classic mode logic
@@ -1383,6 +1391,8 @@ def main_loop(state: RWLState) -> None:
             plan_result = execute_plan_phase(state)
             state.phase_history.append(f"PLAN_{state.iteration}")
             if not plan_result.success:
+                if 'lost the lock' in str(result.error):
+                    return
                 handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
 
         # Check for completion promise
