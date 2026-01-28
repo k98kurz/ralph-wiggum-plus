@@ -927,9 +927,11 @@ class TestStateManagement(TestWithTempDir):
 
         research.save_state_to_disk(state)
 
-        loaded = research.load_state_from_disk(self.research_name)
+        result = research.load_state_from_disk(self.research_name)
 
-        assert loaded is not None, "Should load state successfully"
+        assert isinstance(result, research.Ok), \
+            f"Should load state successfully; got {result}"
+        loaded = result.data
         assert loaded.original_topic == state.original_topic, "Topic should match"
         assert loaded.breadth == state.breadth, "Breadth should match"
         assert loaded.depth == state.depth, "Depth should match"
@@ -939,7 +941,8 @@ class TestStateManagement(TestWithTempDir):
     def test_load_state_nonexistent(self):
         """Test loading non-existent state returns None."""
         result = research.load_state_from_disk("nonexistent")
-        assert result is None, "Should return None for non-existent state"
+        assert isinstance(result, research.Err), \
+            f"Should return Err for non-existent state; got {result}"
 
     def test_rwr_state_defaults(self):
         """Test RWRState default values."""
