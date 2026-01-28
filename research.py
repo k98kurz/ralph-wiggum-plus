@@ -971,9 +971,12 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]
         )
 
         if result.success:
+            accepted_path = get_research_path(state.research_name, REVIEW_ACCEPTED_FILE)
+            rejected_path = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
+
             if is_final:
-                accepted_exists = Path("review.accepted.md").exists()
-                rejected_exists = Path("review.rejected.md").exists()
+                accepted_exists = accepted_path.exists()
+                rejected_exists = rejected_path.exists()
 
                 if accepted_exists ^ rejected_exists:
                     print("FINAL REVIEW phase completed successfully")
@@ -981,8 +984,8 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]
                 else:
                     return failure(Exception("FINAL REVIEW must create exactly one of: review.accepted.md, review.rejected.md"))
             else:
-                accepted_exists = Path("review.accepted.md").exists()
-                rejected_exists = Path("review.rejected.md").exists()
+                accepted_exists = accepted_path.exists()
+                rejected_exists = rejected_path.exists()
 
                 if accepted_exists ^ rejected_exists:
                     print("REVIEW phase completed successfully")
@@ -1202,7 +1205,8 @@ def run_final_cycle(state: RWRState) -> None:
         print("FINAL REVIEW phase failed, exiting...")
         return
 
-    if Path("review.rejected.md").exists():
+    rejected_path = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
+    if rejected_path.exists():
         revise_result = execute_revise_phase(state)
         if not revise_result.success:
             print("REVISE phase failed, exiting...")
@@ -1245,16 +1249,16 @@ def main_loop(state: RWRState) -> None:
         state.phase_history.append(f"RESEARCH_{state.iteration}")
         save_state_to_disk(state)
 
-        if (path_dir/"review.accepted.md").exists():
+        if (path_dir/REVIEW_ACCEPTED_FILE).exists():
             try:
-                (path_dir/"review.accepted.md").unlink()
+                (path_dir/REVIEW_ACCEPTED_FILE).unlink()
             except Exception as e:
-                print(f"WARNING: Could not delete review.accepted.md: {e}")
-        if (path_dir/"review.rejected.md").exists():
+                print(f"WARNING: Could not delete {REVIEW_ACCEPTED_FILE}: {e}")
+        if (path_dir/REVIEW_REJECTED_FILE).exists():
             try:
-                (path_dir/"review.rejected.md").unlink()
+                (path_dir/REVIEW_REJECTED_FILE).unlink()
             except Exception as e:
-                print(f"WARNING: Could not delete review.rejected.md: {e}")
+                print(f"WARNING: Could not delete {REVIEW_REJECTED_FILE}: {e}")
 
         review_result = execute_review_phase(state)
         state.phase_history.append(f"REVIEW_{state.iteration}")
