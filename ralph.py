@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.11-dev2"
+VERSION = "0.0.12-dev"
 
 
 # Configuration Constants
@@ -100,6 +100,11 @@ def pipe(
         if result.success:
             result = fn(result)
     return result
+
+
+# formatting helper function
+def lstrip_lines(text: str) -> str:
+    return "\n".join([l.lstrip() for l in text.split("\n")])
 
 
 class Phase(Enum):
@@ -499,7 +504,7 @@ def load_state_from_disk() -> Result[RWLState]:
 
 def generate_initial_plan_prompt(state: RWLState) -> str:
     """Generate the initial implementation plan prompt with optional CLI prompt prepended."""
-    template = get_template('initial_plan', state,
+    template = get_template('initial_plan', state, lstrip_lines(
         f"""You are creating an initial implementation plan.
 
     TASK:
@@ -534,11 +539,11 @@ def generate_initial_plan_prompt(state: RWLState) -> str:
     ## Dependencies
     Note any task dependencies or prerequisites
 
-    OUTPUT: Create {IMPLEMENTATION_PLAN_FILE} with your plan""")
+    OUTPUT: Create {IMPLEMENTATION_PLAN_FILE} with your plan"""))
     return interpolate_template(template, state)
 
 def generate_plan_review_prompt(state: RWLState) -> str:
-    template = get_template('plan_review', state,
+    template = get_template('plan_review', state, lstrip_lines(
         f"""You are reviewing an implementation plan.
 
     ORIGINAL PROMPT:
@@ -557,11 +562,11 @@ def generate_plan_review_prompt(state: RWLState) -> str:
     8. Provide constructive criticism.
 
     OUTPUT: Create {PLAN_REVIEW_FILE} with your analysis. If the plan does not need any
-    updates, skip this step.""")
+    updates, skip this step."""))
     return interpolate_template(template, state)
 
 def generate_revise_plan_prompt(state: RWLState) -> str:
-    template = get_template('revise_plan', state,
+    template = get_template('revise_plan', state, lstrip_lines(
         f"""You are revising an implementation plan to incorporate and address
     the critique from the reviewer.
 
@@ -577,12 +582,12 @@ def generate_revise_plan_prompt(state: RWLState) -> str:
     {IMPLEMENTATION_PLAN_FILE} to address those concerns/incorporate that feedback.
     5. Do NOT over-specify with irrelevant details. Leave something to the
     judgment of the implementer.
-    6. Delete the {PLAN_REVIEW_FILE} file when you are done.""")
+    6. Delete the {PLAN_REVIEW_FILE} file when you are done."""))
     return interpolate_template(template, state)
 
 def generate_build_prompt(state: RWLState) -> str:
     """Generate the prompt for the BUILD phase."""
-    template = get_template('build', state,
+    template = get_template('build', state, lstrip_lines(
         f"""You are a software engineer working to complete programming tasks.
 
     ORIGINAL PROMPT:
@@ -628,7 +633,7 @@ def generate_build_prompt(state: RWLState) -> str:
     create {COMPLETED_FILE} with exactly: <promise>COMPLETE</promise>
 
     IMPORTANT:
-    Focus on precise implementation and accurate, concise documentation.""")
+    Focus on precise implementation and accurate, concise documentation."""))
     if state.enhanced_mode:
         last_step = f'Create {REQUEST_REVIEW_FILE} when the task is complete'
     else:
@@ -637,7 +642,7 @@ def generate_build_prompt(state: RWLState) -> str:
 
 def generate_final_build_prompt(state: RWLState) -> str:
     """Generate the prompt for the BUILD phase."""
-    template = get_template('final_build', state,
+    template = get_template('final_build', state, lstrip_lines(
         f"""You are putting the finishing touches on the project.
 
     ORIGINAL PROMPT:
@@ -645,12 +650,12 @@ def generate_final_build_prompt(state: RWLState) -> str:
 
     PHASE - FINAL BUILD:
     Your task is to read the {REVIEW_FINAL_FILE} file for feedback on issues that need
-    to be addressed, then work to address them.""")
+    to be addressed, then work to address them."""))
     return interpolate_template(template, state)
 
 def generate_final_review_prompt(state: RWLState) -> str:
     """Generate the prompt for the final REVIEW phase."""
-    template = get_template('final_review', state,
+    template = get_template('final_review', state, lstrip_lines(
         f"""You are conducting a FINAL REVIEW of the completed implementation.
 
     ORIGINAL PROMPT:
@@ -673,12 +678,12 @@ def generate_final_review_prompt(state: RWLState) -> str:
     OUTPUT:
     - If everything is satisfactory: create {REVIEW_FINAL_FILE} with the a concise
     analysis of work completed
-    - If improvements are needed: create {REVIEW_FINAL_FILE} with specific action items""")
+    - If improvements are needed: create {REVIEW_FINAL_FILE} with specific action items"""))
     return interpolate_template(template, state)
 
 def generate_review_prompt(state: RWLState) -> str:
     """Generate the prompt for the REVIEW phase."""
-    template = get_template('review', state,
+    template = get_template('review', state, lstrip_lines(
         f"""You are reviewing the completion of a task in the development cycle.
 
     ORIGINAL PROMPT:
@@ -712,13 +717,13 @@ def generate_review_prompt(state: RWLState) -> str:
         - Update the status of the rejected tasks in the {IMPLEMENTATION_PLAN_FILE}
         file from "In Review" to "In Progress"
 
-    CRITICAL: You must create exactly one of {REVIEW_PASSED_FILE} or {REVIEW_REJECTED_FILE}.""")
+    CRITICAL: You must create exactly one of {REVIEW_PASSED_FILE} or {REVIEW_REJECTED_FILE}."""))
 
     return interpolate_template(template, state)
 
 def generate_plan_prompt(state: RWLState) -> str:
     """Generate the prompt for the PLAN phase."""
-    template = get_template('plan', state,
+    template = get_template('plan', state, lstrip_lines(
         f"""You are planning development tasks or revising an existing plan.
 
     ORIGINAL PROMPT:
@@ -760,12 +765,12 @@ def generate_plan_prompt(state: RWLState) -> str:
     ## Dependencies
     Note any task dependencies or prerequisites
 
-    OUTPUT: Update {IMPLEMENTATION_PLAN_FILE} with the revised plan""")
+    OUTPUT: Update {IMPLEMENTATION_PLAN_FILE} with the revised plan"""))
     return interpolate_template(template, state)
 
 def generate_commit_prompt(state: RWLState) -> str:
     """Generate the prompt for the COMMIT phase."""
-    template = get_template('commit', state,
+    template = get_template('commit', state, lstrip_lines(
         f"""You are preparing to commit completed work.
 
     PHASE: COMMIT
@@ -792,7 +797,7 @@ def generate_commit_prompt(state: RWLState) -> str:
     ACTIONS:
     1. Stage additional files/changes if needed: git add <files>
     2. Execute the commit with the generated message
-    3. $step3""")
+    3. $step3"""))
     if state.push_commits:
         step3 = "Commit then push"
     else:
@@ -801,7 +806,7 @@ def generate_commit_prompt(state: RWLState) -> str:
 
 def generate_recovery_prompt(state: RWLState) -> str:
     """Generate the prompt for the RECOVERY phase."""
-    template = get_template('recovery', state,
+    template = get_template('recovery', state, lstrip_lines(
         f"""You are diagnosing and recovering from a phase failure.
 
     ORIGINAL PROMPT:
@@ -838,7 +843,7 @@ def generate_recovery_prompt(state: RWLState) -> str:
         - Prevention measures for future iterations
         - Whether to retry the failed phase or continue with adjustments
 
-    GOAL: Provide concise, actionable recovery guidance to get development back on track.""")
+    GOAL: Provide concise, actionable recovery guidance to get development back on track."""))
     return interpolate_template(template, state)
 
 
