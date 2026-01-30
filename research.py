@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.1-dev"
+VERSION = "0.0.2"
 
 
 # Configuration Constants
@@ -59,12 +59,13 @@ REVIEW_ACCEPTED_FILE = "review.accepted.md"
 REVIEW_REJECTED_FILE = "review.rejected.md"
 RECOVERY_NOTES_FILE = "recovery.notes.md"
 COMPLETED_FILE = "completed.md"
+PROMPT_FILE = "research_prompt.md"
 
-# Subdirectory Constants
+# Directory Constants
 ARCHIVE_DIR = "archive"
 LOGS_DIR = "logs"
-TEMPLATES_DIR = "templates"
-PROGRESS_DIR = "progress"
+TEMPLATES_DIR = ".templates"
+PROGRESS_DIR = ".progress"
 REPORTS_DIR = "reports"
 
 
@@ -149,6 +150,7 @@ class RWRState:
     original_topic: str = field(default="")
 
 
+# helper functions
 def calculate_min_iterations(breadth: int, depth: int) -> int:
     """Calculate minimum safe iteration limit as X^(Y+1) + 5.
         A complete breadth-first search with depth Y and breadth X
@@ -159,13 +161,16 @@ def calculate_min_iterations(breadth: int, depth: int) -> int:
     """
     return breadth ** (depth + 1) + 5
 
-
 def slugify(text: str) -> str:
     """Convert text to a slug for filename generation."""
     text = text.lower()
     text = re.sub(r'[^a-z0-9\s-]', '', text)
     text = re.sub(r'[\s-]+', '-', text)
     return text.strip('-')
+
+def get_research_path(research_name: str, *path_parts: str) -> Path:
+    """Generate per-research path preserving existing directory structure."""
+    return Path(f"{RESEARCH_DIR}/{research_name}", *path_parts)
 
 
 def setup_signal_handlers(state: RWRState) -> None:
@@ -185,7 +190,7 @@ def setup_logging(research_name: str) -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
 
-# Archive Constants
+# Archive constants and functionality
 ARCHIVED_HASHES: set[str] = set()
 
 ARCHIVE_FILENAMES = [
@@ -200,12 +205,6 @@ ARCHIVE_FILENAMES = [
 
 ARCHIVE_FILE_FORMAT = re.compile(r"^(\d+)\.([a-f0-9]{32})\.(.+)$")
 
-
-def get_research_path(research_name: str, *path_parts: str) -> Path:
-    """Generate per-research path preserving existing directory structure."""
-    return Path(f"{RESEARCH_DIR}/{research_name}", *path_parts)
-
-
 def populate_archived_hashes(state: RWRState) -> None:
     """Populate the in-memory hash set from existing archives for this token."""
     archive_dir = get_research_path(state.research_name, ARCHIVE_DIR)
@@ -219,7 +218,6 @@ def populate_archived_hashes(state: RWRState) -> None:
             ARCHIVED_HASHES.add(file_hash)
         except Exception as e:
             print(f"WARNING: Could not read archive file {archive_file}: {e}")
-
 
 def archive_intermediate_file(
         file_path: Path, state: RWRState, prepend: str = ""
@@ -253,20 +251,18 @@ def archive_intermediate_file(
     except Exception as e:
         print(f"WARNING: Could not archive {file_path}: {e}")
 
-
 def archive_any_process_files(state: RWRState) -> None:
     """Check for and archive any intermediate files."""
-    file_dir = get_research_path(state.research_name)
+    files_dir = get_research_path(state.research_name)
     for file_name in ARCHIVE_FILENAMES:
-        archive_intermediate_file(file_dir / file_name, state)
+        archive_intermediate_file(files_dir / file_name, state)
 
-    progress_dir = get_research_path(state.research_name, PROGRESS_DIR)
+    progress_dir = files_dir / PROGRESS_DIR
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
             if progress_file.name != "README.md":
                 subtopic = progress_file.parent.name
                 archive_intermediate_file(progress_file, state, prepend=subtopic)
-
 
 def reorganize_archive_files(
         state: RWRState, current_token: str | None = None
@@ -327,8 +323,8 @@ def reorganize_archive_files(
                 src_file.unlink()
 
 
+# Prompt template system
 PROMPT_TEMPLATES = {}
-
 
 def get_template(template_name: str, state: RWRState, default: str) -> str:
     if template_name in PROMPT_TEMPLATES:
@@ -337,10 +333,10 @@ def get_template(template_name: str, state: RWRState, default: str) -> str:
             return template
         return (template + get_phase_recovery_template())
 
-    template_dir = get_research_path(state.research_name, TEMPLATES_DIR)
-    os.makedirs(template_dir, exist_ok=True)
+    templates_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
+    os.makedirs(templates_dir, exist_ok=True)
 
-    file_path = template_dir / f'{template_name}.md'
+    file_path = templates_dir / f'{template_name}.md'
 
     if not file_path.exists():
         with open(file_path, 'w') as f:
@@ -353,13 +349,11 @@ def get_template(template_name: str, state: RWRState, default: str) -> str:
         return template
     return (template + get_phase_recovery_template())
 
-
 def get_global_template(template_name: str, default: str) -> str:
     """Get template from global .research/templates directory."""
-    template_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
-    os.makedirs(template_dir, exist_ok=True)
-
-    file_path = template_dir / f'{template_name}.md'
+    templates_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
+    os.makedirs(templates_dir, exist_ok=True)
+    file_path = templates_dir / f'{template_name}.md'
 
     if not file_path.exists():
         with open(file_path, 'w') as f:
@@ -368,17 +362,16 @@ def get_global_template(template_name: str, default: str) -> str:
         template = f.read()
     return template or default
 
-
 def get_phase_recovery_template() -> str:
     if 'phase_recovery' in PROMPT_TEMPLATES:
         return PROMPT_TEMPLATES['phase_recovery']
 
-    template_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
-    os.makedirs(template_dir, exist_ok=True)
+    templates_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
+    os.makedirs(templates_dir, exist_ok=True)
     default = '\nThe previous attempt to run this phase failed. Read ' +\
-        f' {RECOVERY_NOTES_FILE} for phase recovery information.'
+        f' .research/$research_name/{RECOVERY_NOTES_FILE} for phase recovery information.'
 
-    file_path = template_dir / 'phase_recovery.md'
+    file_path = templates_dir / 'phase_recovery.md'
     if not file_path.exists():
         with open(file_path, 'w') as f:
             f.write(default)
@@ -386,7 +379,6 @@ def get_phase_recovery_template() -> str:
         template = f.read()
         PROMPT_TEMPLATES['phase_recovery'] = template
     return template or default
-
 
 def interpolate_template(template: str, state: RWRState, **kwargs) -> str:
     variables = {
@@ -413,6 +405,7 @@ def interpolate_template(template: str, state: RWRState, **kwargs) -> str:
     return Template(template).substitute(variables)
 
 
+# File system operations
 def validate_environment(research_name: str) -> None:
     """Validate the environment before starting."""
     if not Path(".git").exists():
@@ -425,7 +418,6 @@ def validate_environment(research_name: str) -> None:
     except Exception as e:
         print(f"ERROR: Cannot create {get_research_path(research_name)} directory: {e}")
         sys.exit(1)
-
 
 def get_project_lock(research_name: str, force_resume: bool = False) -> str | None:
     """Create a project lock file and return the lock token."""
@@ -476,7 +468,6 @@ def get_project_lock(research_name: str, force_resume: bool = False) -> str | No
         print(f"ERROR: Cannot create lock file: {e}")
         return None
 
-
 def check_project_lock(state: RWRState) -> bool:
     """Check if the project lock is still valid."""
     lock_file = get_research_path(state.research_name, LOCK_FILE)
@@ -497,7 +488,6 @@ def check_project_lock(state: RWRState) -> bool:
     except (json.JSONDecodeError, KeyError, OSError):
         return False
 
-
 def release_project_lock(state: RWRState) -> None:
     """Release the project lock."""
     if not state.lock_token:
@@ -516,7 +506,6 @@ def release_project_lock(state: RWRState) -> None:
     except (json.JSONDecodeError, KeyError, OSError) as e:
         print(f"WARNING: Error releasing lock: {e}")
 
-
 def cleanup_process_files(state: RWRState) -> None:
     """Clean up lingering process files after successful completion."""
     archive_any_process_files(state)
@@ -534,7 +523,7 @@ def cleanup_process_files(state: RWRState) -> None:
             except Exception as e:
                 print(f"WARNING: Could not remove {file_path}: {e}")
 
-    progress_dir = research_dir / "progress"
+    progress_dir = research_dir / PROGRESS_DIR
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
             if progress_file.name != "README.md":
@@ -543,7 +532,6 @@ def cleanup_process_files(state: RWRState) -> None:
                     print(f"Cleaned up: {progress_file}")
                 except Exception as e:
                     print(f"WARNING: Could not remove {progress_file}: {e}")
-
 
 def save_state_to_disk(state: RWRState) -> None:
     """Save the current state to disk for crash recovery."""
@@ -556,7 +544,6 @@ def save_state_to_disk(state: RWRState) -> None:
             json.dump(state_dict, f, indent=2)
     except Exception as e:
         print(f"WARNING: Error saving state: {e}")
-
 
 def load_state_from_disk(research_name: str) -> Result[RWRState]:
     """Load state from disk for crash recovery."""
@@ -579,12 +566,12 @@ def load_state_from_disk(research_name: str) -> Result[RWRState]:
 
         return success(RWRState(**result.data))
 
-
-def create_research_directory_structure(
-        research_name: str, original_topic: str, breadth: int, depth: int
+def ensure_research_directory_structure(
+        research_name: str, original_topic: str
     ) -> None:
     """Create the .research/{name}/ directory structure with all required
-        subdirectories and files.
+        subdirectories and files if they do not exist. (No overwriting of
+        existing files allowed.)
     """
     research_dir = get_research_path(research_name)
     research_dir.mkdir(parents=True, exist_ok=True)
@@ -594,48 +581,391 @@ def create_research_directory_structure(
     (research_dir / TEMPLATES_DIR).mkdir(exist_ok=True)
     (research_dir / LOGS_DIR).mkdir(exist_ok=True)
 
-    reports_dir = Path(REPORTS_DIR) / research_name
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    # ensure reports/ directory exists
+    Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
-    lock_data = {
-        "lock_token": "",
-        "created": 0,
-        "pid": 0
-    }
-    lock_file = research_dir / LOCK_FILE
-    with open(lock_file, "w") as f:
-        json.dump(lock_data, f)
-
-    state = RWRState(
-        original_topic=original_topic,
-        breadth=breadth,
-        depth=depth,
-        max_iterations=calculate_min_iterations(breadth, depth),
-        research_name=research_name,
-        start_time=time()
-    )
-    save_state_to_disk(state)
-
-    progress_content = f"""# Research Progress
-
-    ## Summary
-    - Iteration: 0
-    - Topics Completed: 0 of 0
-
-    ## Recent Activity
-    - Research session initialized for: {original_topic}"""
     progress_file = research_dir / PROGRESS_FILE
-    with open(progress_file, "w") as f:
-        f.write(progress_content)
+    if not progress_file.exists():
+        progress_content = lstrip_lines(f"""# Research Progress
 
-    readme_file = research_dir / "progress" / "README.md"
-    with open(readme_file, "w") as f:
-        f.write("# Progress Directory\n\nPer-topic progress files will be stored here.\n")
+        ## Summary
+        - Iteration: 0
+        - Topics Completed: 0 of 0
+
+        ## Recent Activity
+        - Research session initialized for: {original_topic}""")
+        with open(progress_file, "w") as f:
+            f.write(progress_content)
+
+    readme_file = research_dir / PROGRESS_DIR / "readme.md"
+    if not readme_file.exists():
+        readme_content = lstrip_lines(f"""# Progress Directory
+
+        Per-topic progress files will be stored here.""")
+        with open(readme_file, "w") as f:
+            f.write(readme_content)
 
     print(f"Created research directory structure: {get_research_path(research_name)}/")
-    print(f"Created reports directory: {Path(REPORTS_DIR) / research_name}/")
+
+def check_for_completion(state: RWRState) -> bool:
+    """Check for the COMPLETED_FILE."""
+    try:
+        completed_file = get_research_path(state.research_name, COMPLETED_FILE)
+        if completed_file.exists():
+            return True
+    except:
+        pass
+    return False
+
+def get_completion_stats(state: RWRState) -> Result[tuple[int, int]]:
+    """Get completion statistics from RESEARCH_PLAN_FILE."""
+    try:
+        plan_file = get_research_path(state.research_name, RESEARCH_PLAN_FILE)
+        if not plan_file.exists():
+            return failure(Exception("Plan file missing"))
+
+        content = plan_file.read_text()
+        total = content.count("### ")
+        complete = content.count("Status: Complete")
+
+        return success((complete, total))
+    except Exception as e:
+        return failure(e)
 
 
+# Prompt generators
+def generate_initial_plan_prompt(state: RWRState) -> str:
+    """Generate the initial research plan prompt."""
+    plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
+    template = get_template('initial_plan', state, lstrip_lines(
+        f"""You are creating an initial research plan.
+
+    TOPIC:
+    $original_topic
+
+    PARAMETERS:
+    - Breadth: $breadth
+    - Depth: $depth
+
+    INSTRUCTIONS:
+    1. Analyze the topic to identify root research question(s)
+    2. Create depth 0 topics for each major question (up to $breadth topics)
+    3. Create {plan_file} with the specified format
+    4. Set up acceptance criteria for each topic
+
+    PLAN FORMAT:
+    # Research Plan
+
+    ## Metadata
+    - Topic: [original research topic or question]
+    - Breadth: $breadth
+    - Depth: $depth
+
+    ## Topics
+
+    ### [Topic Name] (Depth: 0)
+    - Status: Pending
+    - Slug: [topic slug]
+    - Description: Brief description of the topic
+    - Acceptance Criteria:
+      - Criterion 1
+      - Criterion 2
+      - Criterion 3
+
+    ## Completion Status
+    - Total Topics: N
+    - Complete: 0
+    - In Progress: 0
+    - Pending: N
+
+    OUTPUT: Create {plan_file} with your research plan"""))
+    return interpolate_template(template, state)
+
+def generate_research_prompt(state: RWRState) -> str:
+    """Generate the prompt for the RESEARCH phase."""
+    plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
+    progress_dir = f".research/$research_name/{PROGRESS_DIR}"
+    template = get_template('research', state, lstrip_lines(
+        f"""You are a research assistant conducting systematic research.
+
+    TOPIC:
+    $original_topic
+
+    PARAMETERS:
+    - Breadth: $breadth
+    - Depth: $depth
+    - Current Iteration: $iteration
+    - Max Iterations: $max_iterations
+
+    PHASE: RESEARCH
+    Your goal is to conduct research on pending topics using breadth-first search.
+
+    INSTRUCTIONS:
+    1. Read {plan_file} to identify topics marked "Pending" or "In Progress"
+    2. Prioritize depth 0 topics (high-level questions) first
+    3. For each topic:
+       - Compile notes from web and file search tools
+       - Identify up to $breadth subtopics to explore (if depth < $depth)
+       - Write/update {progress_dir}/[topic_slug].md with detailed findings
+       - Update {plan_file} with any new subtopics
+       - Mark the topic as "In Review"
+    4. Halt after completing research on one topic
+
+    RESEARCH OUTPUT:
+    - Update {progress_dir}/[topic_slug].md with findings, sources, and knowledge gaps
+    - Update {plan_file} with status changes and new subtopics
+
+    IMPORTANT:
+    - Focus on breadth-first exploration (cover all topics at current depth
+    before going deeper)
+    - Do NOT force additional subtopics if fewer than $breadth can be found
+    - When depth $depth is reached, no new subtopics should be created
+    - Cite sources properly in your findings"""))
+    return interpolate_template(template, state)
+
+def generate_review_prompt(state: RWRState) -> str:
+    """Generate the prompt for the REVIEW phase."""
+    plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
+    accepted_file = f".research/$research_name/{REVIEW_ACCEPTED_FILE}"
+    rejected_file = f".research/$research_name/{REVIEW_REJECTED_FILE}"
+    progress_dir = f".research/$research_name/{PROGRESS_DIR}"
+    template = get_template('review', state, lstrip_lines(
+        f"""You are reviewing research findings for quality and completeness.
+
+    TOPIC:
+    $original_topic
+
+    PARAMETERS:
+    - Breadth: $breadth
+    - Depth: $depth
+    - Current Iteration: $iteration
+
+    PHASE: REVIEW
+    Your goal is to evaluate research findings against acceptance criteria.
+
+    INSTRUCTIONS:
+    1. Read {plan_file} for topics marked "In Review"
+    2. Read the corresponding {progress_dir}/[topic_slug].md file
+    3. Perform knowledge gap analysis
+    4. Create exactly one of:
+       - {accepted_file}: findings meet acceptance criteria
+       - {rejected_file}: specific gaps and action items required
+
+    REVIEW CRITERIA:
+    - Completeness: Does it address the topic adequately?
+    - Quality: Are findings supported by evidence?
+    - Sources: Are sources properly cited?
+    - Depth: Is the research thorough enough?
+
+    OUTPUT:
+    - If ACCEPTED: Create {accepted_file} and mark topic "Complete"
+    - If REJECTED: Create {rejected_file} with gaps, mark topic "In Progress"
+
+    CRITICAL: You must create exactly one of {accepted_file} or
+    {rejected_file}."""))
+    return interpolate_template(template, state)
+
+def generate_synthesize_prompt(state: RWRState) -> str:
+    """Generate the prompt for the SYNTHESIZE phase (final report generation)."""
+    plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
+    accepted_file = f".research/$research_name/{REVIEW_ACCEPTED_FILE}"
+    rejected_file = f".research/$research_name/{REVIEW_REJECTED_FILE}"
+    progress_dir = f".research/$research_name/{PROGRESS_DIR}"
+    report_file = f"{REPORTS_DIR}/$research_name.md"
+    template = get_template('synthesize', state, lstrip_lines(
+        f"""You are synthesizing research findings into a comprehensive report.
+
+    TOPIC:
+    $original_topic
+
+    PARAMETERS:
+    - Breadth: $breadth
+    - Depth: $depth
+    - Iterations: $iteration
+
+    PHASE: SYNTHESIZE
+    Your goal is to compile all research findings into a unified report.
+
+    INSTRUCTIONS:
+    1. Read all {progress_dir}/[topic_slug].md files
+    2. Read {plan_file} for topic hierarchy
+    3. Create {report_file} with:
+       - Executive summary of key findings
+       - Findings organized by topic hierarchy
+       - Sources/references section with proper citations
+       - Clear, professional writing
+
+    REPORT FORMAT:
+    # Research Report: [Topic]
+
+    ## Executive Summary
+    [Brief overview of key findings]
+
+    ## Introduction
+    [Context and research objectives]
+
+    ## Methodology
+    [Brief description of research approach]
+
+    ## Findings
+
+    ### [Topic 1]
+    [Detailed findings with sources]
+
+    ### [Subtopic 1.1]
+    [Subtopic findings with sources]
+
+    ## Sources
+    - [Source 1]: [URL or citation]
+    - [Source 2]: [URL or citation]
+
+    ## Conclusion
+    [Summary and implications]
+
+    OUTPUT: Create {report_file}"""))
+    return interpolate_template(template, state)
+
+def generate_final_review_prompt(state: RWRState) -> str:
+    """Generate the prompt for the FINAL REVIEW phase."""
+    plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
+    accepted_file = f".research/$research_name/{REVIEW_ACCEPTED_FILE}"
+    rejected_file = f".research/$research_name/{REVIEW_REJECTED_FILE}"
+    report_file = f"{REPORTS_DIR}/$research_name.md"
+    template = get_template('final_review', state, lstrip_lines(
+        f"""You are conducting a final quality review of the research report.
+
+    TOPIC:
+    $original_topic
+
+    PHASE: FINAL REVIEW
+    Your goal is to ensure the report meets quality standards.
+
+    INSTRUCTIONS:
+    1. Read the synthesized report {report_file}
+    2. Evaluate for:
+       - Completeness: Does it address all topics from {plan_file}?
+       - Coherence: Is the writing logical and well-structured?
+       - Quality: Are findings supported by evidence and properly cited?
+       - Professionalism: Is the tone appropriate and free of errors?
+    3. Create exactly one of:
+       - {accepted_file}: report is satisfactory
+       - {rejected_file}: quality issues requiring revision
+
+    OUTPUT:
+    - If ACCEPTED: Create {accepted_file}, research is complete
+    - If REJECTED: Create {rejected_file} with specific issues, proceed
+    to REVISE phase
+
+    CRITICAL: You must create exactly one of {accepted_file} or
+    {rejected_file}."""))
+    return interpolate_template(template, state)
+
+def generate_revise_prompt(state: RWRState) -> str:
+    """Generate the prompt for the REVISE phase."""
+    accepted_file = f".research/$research_name/{REVIEW_ACCEPTED_FILE}"
+    rejected_file = f".research/$research_name/{REVIEW_REJECTED_FILE}"
+    report_file = f"{REPORTS_DIR}/$research_name.md"
+    template = get_template('revise', state, lstrip_lines(
+        f"""You are revising the research report to address quality issues.
+
+    TOPIC:
+    $original_topic
+
+    PHASE: REVISE
+    Your goal is to address the quality issues identified in {rejected_file}.
+
+    INSTRUCTIONS:
+    1. Read the critique in {rejected_file}
+    2. Make targeted revisions to {report_file}
+    3. Do NOT add new research or go beyond the original scope
+    4. Create {accepted_file} when revisions are complete
+
+    OUTPUT: Update {report_file} with revisions"""))
+    return interpolate_template(template, state)
+
+def generate_recovery_prompt(state: RWRState) -> str:
+    """Generate the prompt for the RECOVERY phase."""
+    recovery_file = f".research/$research_name/{RECOVERY_NOTES_FILE}"
+    template = get_template('recovery', state, lstrip_lines(
+        f"""You are diagnosing and recovering from a phase failure.
+
+    TOPIC:
+    $original_topic
+
+    PHASE: RECOVERY
+    Failed Phase: $failed_phase
+    Error: $last_error
+
+    CONTEXT:
+    - Current iteration: $iteration
+    - Max iterations: $max_iterations
+    - Retry count: $retry_count
+
+    INSTRUCTIONS:
+    1. Analyze what went wrong in the failed phase
+    2. Review .research/$research_name/logs/ for diagnostic information
+    3. Identify the root cause of the failure
+    4. Create a recovery plan in {recovery_file}
+
+    DIAGNOSTIC STEPS:
+    - Check for file system issues (permissions, disk space)
+    - Verify git repository state
+    - Look for configuration or environment problems
+    - Check for timeout or network issues
+
+    RECOVERY OUTPUT ({recovery_file}):
+    - Root cause analysis
+    - If it was a timeout:
+        - Provide guidance for continuing where the previous phase left off
+        - Suggest ways to ensure work is broken up enough to avoid another timeout
+    - If it was NOT a timeout:
+        - Specific steps to resolve the issue
+        - Prevention measures for future iterations
+        - Whether to retry the failed phase or continue with adjustments
+
+    GOAL: Provide concise, actionable recovery guidance to get research back
+    on track."""))
+    return interpolate_template(template, state)
+
+def check_template_generation(state: RWRState) -> bool:
+    """Validate all prompt templates can be generated without errors."""
+    prompt_generators = [
+        generate_initial_plan_prompt,
+        generate_research_prompt,
+        generate_review_prompt,
+        generate_synthesize_prompt,
+        generate_final_review_prompt,
+        generate_revise_prompt,
+        generate_recovery_prompt,
+    ]
+
+    for generate_fn in prompt_generators:
+        try:
+            generate_fn(state)
+        except KeyError as e:
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
+            print(f"ERROR: Template '{template_name}' has invalid variable: {e}")
+            return False
+        except Exception as e:
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
+            print(f"ERROR: Template '{template_name}' failed to generate: {e}")
+            return False
+
+    # special case: recovery template
+    try:
+        get_phase_recovery_template()
+    except Exception as e:
+        print(f"ERROR: phase recovery template failed to generate: {e}")
+        return False
+
+    return True
+
+
+# OpenCode calls
 def call_opencode(
         prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
         mock_mode: bool = False
@@ -673,285 +1003,13 @@ def call_opencode(
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
-def generate_initial_plan_prompt(state: RWRState) -> str:
-    """Generate the initial research plan prompt."""
-    template = get_template('initial_plan', state, lstrip_lines(
-        f"""You are creating an initial research plan.
-
-    TOPIC:
-    $original_topic
-
-    PARAMETERS:
-    - Breadth: $breadth
-    - Depth: $depth
-
-    INSTRUCTIONS:
-    1. Analyze the topic to identify root research question(s)
-    2. Create depth 0 topics for each major question (up to $breadth topics)
-    3. Create {RESEARCH_PLAN_FILE} with the specified format
-    4. Set up acceptance criteria for each topic
-
-    PLAN FORMAT:
-    # Research Plan
-
-    ## Metadata
-    - Topic: [original research topic or question]
-    - Breadth: $breadth
-    - Depth: $depth
-
-    ## Topics
-
-    ### [Topic Name] (Depth: 0)
-    - Status: Pending
-    - Description: Brief description of the topic
-    - Acceptance Criteria:
-      - Criterion 1
-      - Criterion 2
-      - Criterion 3
-
-    ## Completion Status
-    - Total Topics: N
-    - Complete: 0
-    - In Progress: 0
-    - Pending: N
-
-    OUTPUT: Create {RESEARCH_PLAN_FILE} with your research plan"""))
-    return interpolate_template(template, state)
-
-
-def generate_research_prompt(state: RWRState) -> str:
-    """Generate the prompt for the RESEARCH phase."""
-    template = get_template('research', state, lstrip_lines(
-        f"""You are a research assistant conducting systematic research.
-
-    TOPIC:
-    $original_topic
-
-    PARAMETERS:
-    - Breadth: $breadth
-    - Depth: $depth
-    - Current Iteration: $iteration
-    - Max Iterations: $max_iterations
-
-    PHASE: RESEARCH
-    Your goal is to conduct research on pending topics using breadth-first search.
-
-    INSTRUCTIONS:
-    1. Read {RESEARCH_PLAN_FILE} to identify topics marked "Pending" or "In Progress"
-    2. Prioritize depth 0 topics (high-level questions) first
-    3. For each topic:
-       - Compile notes from web and file search tools
-       - Identify up to $breadth subtopics to explore (if depth < $depth)
-       - Write/update progress/[topic_slug].md with detailed findings
-       - Update {RESEARCH_PLAN_FILE} with any new subtopics
-       - Mark the topic as "In Review"
-    4. Halt after completing research on one topic
-
-    RESEARCH OUTPUT:
-    - Update progress/[topic_slug].md with findings, sources, and knowledge gaps
-    - Update {RESEARCH_PLAN_FILE} with status changes and new subtopics
-
-    IMPORTANT:
-    - Focus on breadth-first exploration (cover all topics at current depth
-    before going deeper)
-    - Do NOT force additional subtopics if fewer than $breadth can be found
-    - When depth $depth is reached, no new subtopics should be created
-    - Cite sources properly in your findings"""))
-    return interpolate_template(template, state)
-
-
-def generate_review_prompt(state: RWRState) -> str:
-    """Generate the prompt for the REVIEW phase."""
-    template = get_template('review', state, lstrip_lines(
-        f"""You are reviewing research findings for quality and completeness.
-
-    TOPIC:
-    $original_topic
-
-    PARAMETERS:
-    - Breadth: $breadth
-    - Depth: $depth
-    - Current Iteration: $iteration
-
-    PHASE: REVIEW
-    Your goal is to evaluate research findings against acceptance criteria.
-
-    INSTRUCTIONS:
-    1. Read {RESEARCH_PLAN_FILE} for topics marked "In Review"
-    2. Read the corresponding progress/[topic_slug].md file
-    3. Perform knowledge gap analysis
-    4. Create exactly one of:
-       - {REVIEW_ACCEPTED_FILE}: findings meet acceptance criteria
-       - {REVIEW_REJECTED_FILE}: specific gaps and action items required
-
-    REVIEW CRITERIA:
-    - Completeness: Does it address the topic adequately?
-    - Quality: Are findings supported by evidence?
-    - Sources: Are sources properly cited?
-    - Depth: Is the research thorough enough?
-
-    OUTPUT:
-    - If ACCEPTED: Create {REVIEW_ACCEPTED_FILE} and mark topic "Complete"
-    - If REJECTED: Create {REVIEW_REJECTED_FILE} with gaps, mark topic "In Progress"
-
-    CRITICAL: You must create exactly one of {REVIEW_ACCEPTED_FILE} or
-    {REVIEW_REJECTED_FILE}."""))
-    return interpolate_template(template, state)
-
-
-def generate_synthesize_prompt(state: RWRState) -> str:
-    """Generate the prompt for the SYNTHESIZE phase (final report generation)."""
-    template = get_template('synthesize', state, lstrip_lines(
-        f"""You are synthesizing research findings into a comprehensive report.
-
-    TOPIC:
-    $original_topic
-
-    PARAMETERS:
-    - Breadth: $breadth
-    - Depth: $depth
-    - Iterations: $iteration
-
-    PHASE: SYNTHESIZE
-    Your goal is to compile all research findings into a unified report.
-
-    INSTRUCTIONS:
-    1. Read all progress/[topic_slug].md files
-    2. Read {RESEARCH_PLAN_FILE} for topic hierarchy
-    3. Create reports/$research_name/report.md with:
-       - Executive summary of key findings
-       - Findings organized by topic hierarchy
-       - Sources/references section with proper citations
-       - Clear, professional writing
-
-    REPORT FORMAT:
-    # Research Report: [Topic]
-
-    ## Executive Summary
-    [Brief overview of key findings]
-
-    ## Introduction
-    [Context and research objectives]
-
-    ## Methodology
-    [Brief description of research approach]
-
-    ## Findings
-
-    ### [Topic 1]
-    [Detailed findings with sources]
-
-    ### [Subtopic 1.1]
-    [Subtopic findings with sources]
-
-    ## Sources
-    - [Source 1]: [URL or citation]
-    - [Source 2]: [URL or citation]
-
-    ## Conclusion
-    [Summary and implications]
-
-    OUTPUT: Create reports/$research_name/report.md"""))
-    return interpolate_template(template, state)
-
-
-def generate_final_review_prompt(state: RWRState) -> str:
-    """Generate the prompt for the FINAL REVIEW phase."""
-    template = get_template('final_review', state, lstrip_lines(
-        f"""You are conducting a final quality review of the research report.
-
-    TOPIC:
-    $original_topic
-
-    PHASE: FINAL REVIEW
-    Your goal is to ensure the report meets quality standards.
-
-    INSTRUCTIONS:
-    1. Read the synthesized report reports/$research_name/report.md
-    2. Evaluate for:
-       - Completeness: Does it address all topics from {RESEARCH_PLAN_FILE}?
-       - Coherence: Is the writing logical and well-structured?
-       - Quality: Are findings supported by evidence and properly cited?
-       - Professionalism: Is the tone appropriate and free of errors?
-    3. Create exactly one of:
-       - {REVIEW_ACCEPTED_FILE}: report is satisfactory
-       - {REVIEW_REJECTED_FILE}: quality issues requiring revision
-
-    OUTPUT:
-    - If ACCEPTED: Create {REVIEW_ACCEPTED_FILE}, research is complete
-    - If REJECTED: Create {REVIEW_REJECTED_FILE} with specific issues, proceed
-    to REVISE phase
-
-    CRITICAL: You must create exactly one of {REVIEW_ACCEPTED_FILE} or
-    {REVIEW_REJECTED_FILE}."""))
-    return interpolate_template(template, state)
-
-
-def generate_revise_prompt(state: RWRState) -> str:
-    """Generate the prompt for the REVISE phase."""
-    template = get_template('revise', state, lstrip_lines(
-        f"""You are revising the research report to address quality issues.
-
-    TOPIC:
-    $original_topic
-
-    PHASE: REVISE
-    Your goal is to address the quality issues identified in {REVIEW_REJECTED_FILE}.
-
-    INSTRUCTIONS:
-    1. Read the critique in {REVIEW_REJECTED_FILE}
-    2. Make targeted revisions to reports/$research_name/report.md
-    3. Do NOT add new research or go beyond the original scope
-    4. Create {REVIEW_ACCEPTED_FILE} when revisions are complete
-
-    OUTPUT: Update reports/$research_name/report.md with revisions"""))
-    return interpolate_template(template, state)
-
-
-def generate_recovery_prompt(state: RWRState) -> str:
-    """Generate the prompt for the RECOVERY phase."""
-    template = get_template('recovery', state, lstrip_lines(
-        f"""You are diagnosing and recovering from a phase failure.
-
-    TOPIC:
-    $original_topic
-
-    PHASE: RECOVERY
-    Failed Phase: $failed_phase
-    Error: $last_error
-
-    CONTEXT:
-    - Current iteration: $iteration
-    - Max iterations: $max_iterations
-    - Retry count: $retry_count
-
-    INSTRUCTIONS:
-    1. Analyze what went wrong in the failed phase
-    2. Review .research/$research_name/logs/ for diagnostic information
-    3. Identify the root cause of the failure
-    4. Create a recovery plan in {RECOVERY_NOTES_FILE}
-
-    DIAGNOSTIC STEPS:
-    - Check for file system issues (permissions, disk space)
-    - Verify git repository state
-    - Look for configuration or environment problems
-    - Check for timeout or network issues
-
-    RECOVERY OUTPUT ({RECOVERY_NOTES_FILE}):
-    - Root cause analysis
-    - If it was a timeout:
-        - Provide guidance for continuing where the previous phase left off
-        - Suggest ways to ensure work is broken up enough to avoid another timeout
-    - If it was NOT a timeout:
-        - Specific steps to resolve the issue
-        - Prevention measures for future iterations
-        - Whether to retry the failed phase or continue with adjustments
-
-    GOAL: Provide concise, actionable recovery guidance to get research back
-    on track."""))
-    return interpolate_template(template, state)
-
+def generate_initial_plan(state: RWRState) -> Result[str]:
+    """Generate the initial reserach plan when none exists."""
+    initial_plan_prompt = generate_initial_plan_prompt(state)
+    return call_opencode(
+        initial_plan_prompt, state.model, state.lock_token or "",
+        timeout=state.timeout, mock_mode=state.mock_mode
+    )
 
 def execute_research_phase(state: RWRState) -> Result[str]:
     """Execute the RESEARCH phase."""
@@ -978,7 +1036,6 @@ def execute_research_phase(state: RWRState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]:
     """Execute the REVIEW phase."""
     if not state.lock_token or not check_project_lock(state):
@@ -999,36 +1056,25 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]
         )
 
         if result.success:
-            accepted_path = get_research_path(state.research_name, REVIEW_ACCEPTED_FILE)
-            rejected_path = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
+            accepted_file = get_research_path(state.research_name, REVIEW_ACCEPTED_FILE)
+            rejected_file = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
 
-            if is_final:
-                accepted_exists = accepted_path.exists()
-                rejected_exists = rejected_path.exists()
+            accepted_exists = accepted_file.exists()
+            rejected_exists = rejected_file.exists()
+            phase_text = "FINAL REVIEW" if is_final else "REVIEW"
 
-                if accepted_exists ^ rejected_exists:
-                    print("FINAL REVIEW phase completed successfully")
-                    return result
-                else:
-                    return failure(Exception("FINAL REVIEW must create exactly "+
-                        f"one of: {REVIEW_ACCEPTED_FILE}, {REVIEW_REJECTED_FILE}"))
+            if accepted_exists ^ rejected_exists:
+                print(f"{phase_text} phase completed successfully")
+                return result
             else:
-                accepted_exists = accepted_path.exists()
-                rejected_exists = rejected_path.exists()
-
-                if accepted_exists ^ rejected_exists:
-                    print("REVIEW phase completed successfully")
-                    return result
-                else:
-                    return failure(Exception("REVIEW phase must create exactly "+
-                        f"one of: {REVIEW_ACCEPTED_FILE}, {REVIEW_REJECTED_FILE}"))
+                return failure(Exception(f"{phase_text} must create exactly "
+                    f"one of: {accepted_file}, {rejected_file}"))
         return result
 
     except Exception as e:
         error_msg = f"REVIEW phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
-
 
 def execute_synthesize_phase(state: RWRState) -> Result[str]:
     """Execute the SYNTHESIZE phase."""
@@ -1055,7 +1101,6 @@ def execute_synthesize_phase(state: RWRState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def execute_revise_phase(state: RWRState) -> Result[str]:
     """Execute the REVISE phase."""
     if not state.lock_token or not check_project_lock(state):
@@ -1080,7 +1125,6 @@ def execute_revise_phase(state: RWRState) -> Result[str]:
         error_msg = f"REVISE phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
-
 
 def execute_recovery_phase(state: RWRState) -> Result[str]:
     """Execute the RECOVERY phase."""
@@ -1112,6 +1156,7 @@ def execute_recovery_phase(state: RWRState) -> Result[str]:
         return failure(Exception(error_msg))
 
 
+# Phase retry and final review
 def retry_failed_phase(state: RWRState, failed_phase: str) -> Result[str]:
     """Retry the specific failed phase."""
     if failed_phase == Phase.RESEARCH.value:
@@ -1126,7 +1171,6 @@ def retry_failed_phase(state: RWRState, failed_phase: str) -> Result[str]:
         return execute_revise_phase(state)
     else:
         return failure(Exception(f"Invalid phase for retry: {failed_phase}"))
-
 
 def handle_phase_failure(
         state: RWRState, failed_phase: str, error: Exception
@@ -1183,34 +1227,6 @@ def handle_phase_failure(
         f"Phase {failed_phase} failed after {state.retry_count} attempts: {error}"
     ))
 
-
-def check_for_completion(state: RWRState) -> bool:
-    """Check for the COMPLETED_FILE."""
-    try:
-        completed_file = get_research_path(state.research_name, COMPLETED_FILE)
-        if completed_file.exists():
-            return True
-    except:
-        pass
-    return False
-
-
-def get_completion_stats(state: RWRState) -> Result[tuple[int, int]]:
-    """Get completion statistics from RESEARCH_PLAN_FILE."""
-    try:
-        plan_file = get_research_path(state.research_name, RESEARCH_PLAN_FILE)
-        if not plan_file.exists():
-            return failure(Exception("Plan file missing"))
-
-        content = plan_file.read_text()
-        total = content.count("### ")
-        complete = content.count("Status: Complete")
-
-        return success((complete, total))
-    except Exception as e:
-        return failure(e)
-
-
 def run_final_cycle(state: RWRState) -> None:
     """Run SYNTHESIZE → REVIEW → REVISE final cycle."""
     if not state.lock_token or not check_project_lock(state):
@@ -1264,34 +1280,41 @@ def generate_warning_banner(
 
 def main_loop(state: RWRState) -> None:
     """Main RWR loop orchestrating research phases."""
+    print(f"Starting loop: {state.iteration=} {state.max_iterations=} "
+        f"{state.is_complete=}")
     save_state_to_disk(state)
-    path_dir = get_research_path(state.research_name)
+    files_dir = get_research_path(state.research_name)
 
     while state.iteration < state.max_iterations and not state.is_complete:
         state.iteration += 1
+        print(f"Running iteration {state.iteration}")
 
         result = execute_research_phase(state)
         if not result.success:
+            if 'lost the lock' in str(result.error):
+                return
             handle_phase_failure(state, Phase.RESEARCH.value, str(result.error))
 
         state.phase_history.append(f"RESEARCH_{state.iteration}")
         save_state_to_disk(state)
 
-        if (path_dir/REVIEW_ACCEPTED_FILE).exists():
+        if (files_dir/REVIEW_ACCEPTED_FILE).exists():
             try:
-                (path_dir/REVIEW_ACCEPTED_FILE).unlink()
+                (files_dir/REVIEW_ACCEPTED_FILE).unlink()
             except Exception as e:
                 print(f"WARNING: Could not delete {REVIEW_ACCEPTED_FILE}: {e}")
-        if (path_dir/REVIEW_REJECTED_FILE).exists():
+        if (files_dir/REVIEW_REJECTED_FILE).exists():
             try:
-                (path_dir/REVIEW_REJECTED_FILE).unlink()
+                (files_dir/REVIEW_REJECTED_FILE).unlink()
             except Exception as e:
                 print(f"WARNING: Could not delete {REVIEW_REJECTED_FILE}: {e}")
 
-        review_result = execute_review_phase(state)
+        result = execute_review_phase(state)
         state.phase_history.append(f"REVIEW_{state.iteration}")
-        if not review_result.success:
-            handle_phase_failure(state, Phase.REVIEW.value, str(review_result.error))
+        if not result.success:
+            if 'lost the lock' in str(result.error):
+                return
+            handle_phase_failure(state, Phase.REVIEW.value, str(result.error))
 
         state.is_complete = check_for_completion(state)
         save_state_to_disk(state)
@@ -1311,7 +1334,7 @@ def main_loop(state: RWRState) -> None:
         run_final_cycle(state)
 
         if state.iteration >= state.max_iterations and not state.is_complete:
-            report_file = Path(f"reports/{state.research_name}/report.md")
+            report_file = Path(REPORTS_DIR) / f"{state.research_name}.md"
             if report_file.exists():
                 banner = generate_warning_banner(
                     complete, total, state.iteration, state.max_iterations
@@ -1335,40 +1358,9 @@ def main_loop(state: RWRState) -> None:
             print(f"Topics completed: {complete} of {total}")
         else:
             print(f"All {total} topics completed in {state.iteration} iterations")
-        print(f"Final report: reports/{state.research_name}/report.md")
+        print(f"Final report: reports/{state.research_name}.md")
 
     save_state_to_disk(state)
-
-
-def check_template_generation(state: RWRState) -> bool:
-    """Validate all prompt templates can be generated without errors."""
-    prompt_generators = [
-        generate_initial_plan_prompt,
-        generate_research_prompt,
-        generate_review_prompt,
-        generate_synthesize_prompt,
-        generate_final_review_prompt,
-        generate_revise_prompt,
-        generate_recovery_prompt,
-    ]
-
-    for generate_fn in prompt_generators:
-        try:
-            generate_fn(state)
-        except KeyError as e:
-            template_name = generate_fn.__name__.replace(
-                'generate_', ''
-            ).replace('_prompt', '')
-            print(f"ERROR: Template '{template_name}' has invalid variable: {e}")
-            return False
-        except Exception as e:
-            template_name = generate_fn.__name__.replace(
-                'generate_', ''
-            ).replace('_prompt', '')
-            print(f"ERROR: Template '{template_name}' failed to generate: {e}")
-            return False
-
-    return True
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -1376,14 +1368,14 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Research Tool - AI-powered research assistant",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   %(prog)s "Research the history of artificial intelligence"
   %(prog)s --breadth 5 --depth 2 "Deep dive into machine learning"
-  %(prog)s --name "ai-history" --resume "Continue previous research"
+  %(prog)s --name "ai-history" --resume
   %(prog)s --mock-mode "Test without external dependencies"
 
-Note also that you can use a prompt.md file for complex topics."""
+Note also that you can use a {PROMPT_FILE} file for complex topics."""
     )
 
     parser.add_argument(
@@ -1489,21 +1481,12 @@ def main() -> int:
         reorganize_archive_files(minimal_state)
         return 0
 
-    topic = args.topic
-    if not topic:
-        prompt_file = Path("prompt.md")
-        if prompt_file.exists():
-            topic = prompt_file.read_text().strip()
-        if not topic:
-            print("ERROR: No topic provided. Use positional argument or prompt.md file.")
-            return 1
-
     validate_environment(args.name)
     setup_logging(args.name)
 
     # Handle resume mode
     if args.resume or args.force_resume:
-        result = load_state_from_disk()
+        result = load_state_from_disk(args.name)
         if not result.success:
             print("ERROR: Could not load state. Run without " +
                 f"{'--resume' if args.resume else '--force-resume'}.")
@@ -1520,8 +1503,9 @@ def main() -> int:
                     lock_data = json.load(f)
                 created_time = lock_data.get("created", 0)
                 if time() - created_time < STALE_LOCK_TIMEOUT:
-                    print("ERROR: Lock file is not stale - another RWL process may be running. "
-                          "Use --force-resume to override, or wait for the other process to release the lock.")
+                    print("ERROR: Lock file is not stale - another RWL process"
+                        " may be running. Use --force-resume to override, or wait"
+                        " for the other process to release the lock.")
                     return 1
                 else:
                     print("WARNING: Removing stale lock file")
@@ -1535,10 +1519,12 @@ def main() -> int:
 
         state = loaded_state
         if state.lock_token:
-            populate_archived_hashes(state.lock_token)
+            populate_archived_hashes(state)
         state.lock_token = None
-        state.start_time = time()
+        state.start_time = int(time())
     else:
+        state = None
+
         min_iterations = calculate_min_iterations(args.breadth, args.depth)
 
         if args.max_iterations > 0 and args.max_iterations < min_iterations:
@@ -1561,34 +1547,55 @@ def main() -> int:
             else:
                 print("Mock mode: continuing without confirmation.")
 
-        create_research_directory_structure(args.name, topic, args.breadth, args.depth)
+    # Validate topic
+    topic_content = ""
+    if args.topic:
+        topic_content = args.topic
+        with open(PROMPT_FILE, "a") as f:
+            f.write(f"\n{topic_content}")
+    elif state and state.original_topic:
+        topic_content = state.original_topic
+    elif Path(PROMPT_FILE).exists():
+        with open(PROMPT_FILE, "r") as f:
+            topic_content = f.read().strip()
+    else:
+        print(f"ERROR: No topic provided and no {PROMPT_FILE} file found")
+        return 1
 
-        lock_token = get_project_lock(args.name)
-        if not lock_token:
-            return 1
+    ensure_research_directory_structure(args.name, topic_content)
 
+    if not state:
+        print("CREATING STATE")
         state = RWRState(
-            original_topic=topic,
+            original_topic=topic_content,
             breadth=args.breadth,
             depth=args.depth,
             max_iterations=max_iterations,
             model=args.model,
             review_model=args.review_model,
             lock_token=lock_token,
-            start_time=time(),
+            start_time=int(time()),
             mock_mode=args.mock_mode,
             timeout=args.timeout,
-            research_name=args.name,
+            research_name=slugify(args.name),
             iteration=0
         )
+
+    state.lock_token = get_project_lock(args.name, args.force_resume)
+    if not state.lock_token:
+        print("ERROR: Could not acquire project lock")
+        return 1
+
+    try:
+        # Save initial state
+        save_state_to_disk(state)
 
         print(f"\n{'='*60}")
         print("RESEARCH TOOL v" + VERSION)
         print(f"{'='*60}")
-        print(f"Topic: {topic}")
-        print(f"Breadth: {args.breadth}, Depth: {args.depth}")
-        print(f"Min iterations required: {min_iterations}")
-        print(f"Max iterations: {max_iterations}")
+        print(f"Topic: {state.original_topic}")
+        print(f"Breadth: {state.breadth}, Depth: {state.depth}")
+        print(f"Max iterations: {state.max_iterations}")
         print(f"{'='*60}\n")
 
         setup_signal_handlers(state)
@@ -1599,23 +1606,24 @@ def main() -> int:
             print("ERROR: Template validation failed")
             return 1
 
-        print("\nGenerating initial research plan...")
+        # Check if research plan exists, create if needed
+        plan_file = get_research_path(state.research_name, RESEARCH_PLAN_FILE)
+        if not Path(plan_file).exists():
+            print("\nGenerating initial research plan...")
+            result = generate_initial_plan(state)
 
-        initial_plan_prompt = generate_initial_plan_prompt(state)
-        result = call_opencode(
-            initial_plan_prompt, state.model, state.lock_token or "",
-            timeout=state.timeout, mock_mode=state.mock_mode
-        )
+            if not result.success:
+                print(f"ERROR: Failed to generate initial plan: {result.error}")
+                return 1
 
-        if not result.success:
-            print(f"ERROR: Failed to generate initial plan: {result.error}")
-            return 1
-
-    save_state_to_disk(state)
-
-    main_loop(state)
-
-    return 0
+        main_loop(state)
+        return 0
+    except Exception as e:
+        print(f"ERROR: Unexpected error: {e}")
+        return 1
+    finally:
+        # Cleanup
+        release_project_lock(state)
 
 
 if __name__ == "__main__":
