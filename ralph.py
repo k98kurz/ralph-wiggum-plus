@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.12-dev"
+VERSION = "0.0.12"
 
 
 # Configuration Constants
@@ -47,6 +47,7 @@ STALE_LOCK_TIMEOUT = int(os.getenv("RALPH_STALE_LOCK_TIMEOUT", 3600)) # 60 minut
 FILESYSTEM_SYNC_DELAY = float(os.getenv("FILESYSTEM_SYNC_DELAY", 0.5))
 
 # Filename Constants
+LOCK_FILE = "ralph.lock.json"
 STATE_FILE = ".ralph/state.json"
 PROMPT_FILE = "prompt.md"
 REQUEST_REVIEW_FILE = "request.review.md"
@@ -160,7 +161,7 @@ def setup_logging() -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
 
-# Global state for archiving
+# Archive constants and functionality
 ARCHIVED_HASHES: set[str] = set()
 
 ARCHIVE_FILENAMES = [
@@ -191,7 +192,6 @@ def populate_archived_hashes(lock_token: str) -> None:
             ARCHIVED_HASHES.add(file_hash)
         except Exception as e:
             print(f"WARNING: Could not read archive file {archive_file}: {e}")
-
 
 def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
     """Archive an intermediate file with a timestamp prefix if it hasn't been archived yet."""
@@ -277,7 +277,7 @@ def reorganize_archive_files(lock_token: str | None) -> None:
                 src_file.unlink()
 
 
-# Global cache for prompt templates
+# Prompt template system
 PROMPT_TEMPLATES = {}
 
 def get_template(template_name: str, state: RWLState, default: str) -> str:
@@ -346,6 +346,7 @@ def interpolate_template(template: str, state: RWLState, **kwargs) -> str:
     return Template(template).substitute(variables)
 
 
+# File system operations
 def validate_environment() -> None:
     """Validate the environment before starting."""
     # Check if we're in a git repository
@@ -361,10 +362,9 @@ def validate_environment() -> None:
         print(f"ERROR: Cannot create .ralph directory: {e}")
         sys.exit(1)
 
-
 def get_project_lock() -> str | None:
     """Create a project lock file and return the lock token."""
-    lock_file = Path("ralph.lock.json")
+    lock_file = Path(LOCK_FILE)
 
     # Check for existing lock
     if lock_file.exists():
@@ -409,7 +409,7 @@ def get_project_lock() -> str | None:
 
 def check_project_lock(token: str) -> bool:
     """Check if the project lock is still valid."""
-    lock_file = Path("ralph.lock.json")
+    lock_file = Path(LOCK_FILE)
 
     if not lock_file.exists():
         return False
@@ -433,7 +433,7 @@ def release_project_lock(token: str | None) -> None:
     if not token:
         return
 
-    lock_file = Path("ralph.lock.json")
+    lock_file = Path(LOCK_FILE)
 
     try:
         if lock_file.exists():
@@ -445,7 +445,6 @@ def release_project_lock(token: str | None) -> None:
                 print("Project lock released")
     except (json.JSONDecodeError, KeyError, OSError) as e:
         print(f"WARNING: Error releasing lock: {e}")
-
 
 def cleanup_process_files(lock_token: str) -> None:
     """Clean up lingering process files after successful completion."""
@@ -465,7 +464,6 @@ def cleanup_process_files(lock_token: str) -> None:
 
     if Path(REVIEW_FINAL_FILE).exists():
         print(f"Final review file preserved: {REVIEW_FINAL_FILE}")
-
 
 def save_state_to_disk(state: RWLState) -> None:
     """Save the current state to disk for crash recovery."""
@@ -502,6 +500,7 @@ def load_state_from_disk() -> Result[RWLState]:
         return success(RWLState(**result.data))
 
 
+# Prompt generators
 def generate_initial_plan_prompt(state: RWLState) -> str:
     """Generate the initial implementation plan prompt with optional CLI prompt prepended."""
     template = get_template('initial_plan', state, lstrip_lines(
@@ -846,7 +845,45 @@ def generate_recovery_prompt(state: RWLState) -> str:
     GOAL: Provide concise, actionable recovery guidance to get development back on track."""))
     return interpolate_template(template, state)
 
+def check_template_generation(state: RWLState) -> bool:
+    """Validate all prompt templates can be generated without errors.
 
+    Returns True if all templates are valid, False otherwise.
+    This validates custom templates in .ralph/templates/ before main loop starts.
+    """
+    prompt_generators = [
+        generate_initial_plan_prompt,
+        generate_plan_review_prompt,
+        generate_revise_plan_prompt,
+        generate_build_prompt,
+        generate_final_build_prompt,
+        generate_final_review_prompt,
+        generate_review_prompt,
+        generate_plan_prompt,
+        generate_commit_prompt,
+        generate_recovery_prompt,
+    ]
+
+    for generate_fn in prompt_generators:
+        try:
+            generate_fn(state)
+        except KeyError as e:
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
+            print(f"ERROR: Template '{template_name}' has invalid variable: {e}")
+            return False
+        except Exception as e:
+            template_name = generate_fn.__name__.replace(
+                'generate_', ''
+            ).replace('_prompt', '')
+            print(f"ERROR: Template '{template_name}' failed to generate: {e}")
+            return False
+
+    return True
+
+
+# OpenCode calls
 def call_opencode(
         prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
         mock_mode: bool = False
@@ -887,7 +924,6 @@ def call_opencode(
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def generate_initial_plan(state: RWLState) -> Result[str]:
     """Generate the initial implementation plan when none exists."""
     initial_plan_prompt = generate_initial_plan_prompt(state)
@@ -926,7 +962,6 @@ def generate_initial_plan(state: RWLState) -> Result[str]:
 
     return success(total_result)
 
-
 def execute_build_phase(state: RWLState) -> Result[str]:
     """Execute the BUILD phase."""
     # First check the lock
@@ -956,7 +991,6 @@ def execute_build_phase(state: RWLState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def execute_final_build_phase(state: RWLState) -> Result[str]:
     """Execute the final BUILD phase."""
     # First check the lock
@@ -985,7 +1019,6 @@ def execute_final_build_phase(state: RWLState) -> Result[str]:
         error_msg = f"Final BUILD phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
-
 
 def execute_review_phase(
         state: RWLState, is_final_review: bool = False,
@@ -1052,7 +1085,6 @@ def execute_review_phase(
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def execute_plan_phase(state: RWLState) -> Result[str]:
     """Execute the PLAN phase."""
     # First check the lock
@@ -1085,7 +1117,6 @@ def execute_plan_phase(state: RWLState) -> Result[str]:
         error_msg = f"PLAN phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
-
 
 def execute_commit_phase(state: RWLState) -> Result[str]:
     """Execute the COMMIT phase."""
@@ -1122,7 +1153,6 @@ def execute_commit_phase(state: RWLState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-
 def execute_recovery_phase(state: RWLState) -> Result[str]:
     """Execute the RECOVERY phase."""
     # First check the lock
@@ -1151,12 +1181,12 @@ def execute_recovery_phase(state: RWLState) -> Result[str]:
         print("RECOVERY phase completed successfully")
     return result
 
-
 def execute_final_review_phase(state: RWLState) -> Result[str]:
     """Execute the final REVIEW phase."""
     return execute_review_phase(state, is_final_review=True)
 
 
+# Optional phases
 def should_trigger_review(state: RWLState) -> tuple[bool, bool]:
     """Determine if REVIEW phase should be triggered. First bool
         in return value is whether or not it should review. Second
@@ -1172,7 +1202,6 @@ def should_trigger_review(state: RWLState) -> tuple[bool, bool]:
 
     return False, False
 
-
 def retry_failed_phase(state: RWLState, failed_phase: str) -> Result[str]:
     """Retry the specific failed phase using the same execute functions."""
     if failed_phase == Phase.BUILD.value:
@@ -1185,7 +1214,6 @@ def retry_failed_phase(state: RWLState, failed_phase: str) -> Result[str]:
         return execute_commit_phase(state)
     else:
         return failure(Exception(f"Invalid phase for retry: {failed_phase}"))
-
 
 def handle_phase_failure(
         state: RWLState, failed_phase: str, error: Exception
@@ -1246,7 +1274,6 @@ def handle_phase_failure(
         f"Phase {failed_phase} failed after {state.retry_count} retry attempts"
     ))
 
-
 def check_for_completion(state: RWLState) -> bool:
     """Checks for the COMPLETED_FILE file."""
     try:
@@ -1254,7 +1281,6 @@ def check_for_completion(state: RWLState) -> bool:
             return True
     except Exception:
         return False
-
 
 def run_final_review_cycle(state: RWLState) -> None:
     """Run final REVIEW → BUILD → COMMIT cycle for polishing."""
@@ -1423,43 +1449,6 @@ def main_loop(state: RWLState) -> None:
     save_state_to_disk(state)
 
 
-def check_template_generation(state: RWLState) -> bool:
-    """Validate all prompt templates can be generated without errors.
-
-    Returns True if all templates are valid, False otherwise.
-    This validates custom templates in .ralph/templates/ before main loop starts.
-    """
-    prompt_generators = [
-        generate_initial_plan_prompt,
-        generate_plan_review_prompt,
-        generate_revise_plan_prompt,
-        generate_build_prompt,
-        generate_final_build_prompt,
-        generate_final_review_prompt,
-        generate_review_prompt,
-        generate_plan_prompt,
-        generate_commit_prompt,
-        generate_recovery_prompt,
-    ]
-
-    for generate_fn in prompt_generators:
-        try:
-            generate_fn(state)
-        except KeyError as e:
-            template_name = generate_fn.__name__.replace(
-                'generate_', ''
-            ).replace('_prompt', '')
-            print(f"ERROR: Template '{template_name}' has invalid variable: {e}")
-            return False
-        except Exception as e:
-            template_name = generate_fn.__name__.replace(
-                'generate_', ''
-            ).replace('_prompt', '')
-            print(f"ERROR: Template '{template_name}' failed to generate: {e}")
-            return False
-
-    return True
-
 def parse_arguments() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -1587,7 +1576,7 @@ def main() -> int:
     # Handle archive reorganization
     if args.reorganize_archive:
         lock_token = None
-        lock_file = Path("ralph.lock.json")
+        lock_file = Path(LOCK_FILE)
         if lock_file.exists():
             try:
                 with open(lock_file, "r") as f:
@@ -1607,7 +1596,7 @@ def main() -> int:
             return 1
         loaded_state = result.data
 
-        lock_file = Path("ralph.lock.json")
+        lock_file = Path(LOCK_FILE)
         if lock_file.exists():
             if args.force_resume:
                 print("WARNING: Removing existing lock file (--force-resume)")
