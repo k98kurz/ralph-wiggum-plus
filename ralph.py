@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.13"
+VERSION = "0.0.14"
 
 
 # Configuration Constants
@@ -1444,7 +1444,7 @@ def main_loop(state: RWLState) -> None:
         save_state_to_disk(state)
 
     # Check for final review condition
-    if state.enhanced_mode and state.iteration < state.max_iterations and state.final_review_requested:
+    if state.iteration < state.max_iterations and state.final_review_requested:
         state.phase_history.append(f"FINAL_REVIEW_CYCLE_{state.iteration}")
         run_final_review_cycle(state)
 

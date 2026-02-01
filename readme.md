@@ -21,9 +21,9 @@ welcome). Use at your own risk.
   terminated processes.
 - **Phase Recovery System**: Dedicated recovery phase for diagnosing and
   overcoming transient failures or timeouts.
-- **Final Review Artifact**: When `--enhanced` mode completes successfully, a
-  `review.final.md` file is left in the project root containing a final
-  quality review and summary of the work completed.
+- **Final Review Artifact**: When the loop completes without hitting max
+  iterations, a `review.final.md` file is left in the project root containing a
+  final quality review and summary of the work completed.
 
 ## Usage
 
