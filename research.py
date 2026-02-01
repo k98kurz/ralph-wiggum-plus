@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 
 # Configuration Constants
@@ -1561,7 +1561,6 @@ def main() -> int:
             max_iterations=max_iterations,
             model=args.model,
             review_model=args.review_model,
-            lock_token=lock_token,
             start_time=int(time()),
             mock_mode=args.mock_mode,
             timeout=args.timeout,
