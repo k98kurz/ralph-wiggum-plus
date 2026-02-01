@@ -33,12 +33,12 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 
 
 # Configuration Constants
-DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "opencode/big-pickle")
-DEFAULT_REVIEW_MODEL = os.getenv("DEFAULT_REVIEW_MODEL", "opencode/big-pickle")
+DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "opencode/gpt-5-nano")
+DEFAULT_REVIEW_MODEL = os.getenv("DEFAULT_REVIEW_MODEL", "opencode/gpt-5-nano")
 DEFAULT_BREADTH = int(os.getenv("DEFAULT_BREADTH", 3))
 DEFAULT_DEPTH = int(os.getenv("DEFAULT_DEPTH", 3))
 OPENCODE_TIMEOUT = int(os.getenv("OPENCODE_TIMEOUT", 1200))
@@ -194,6 +194,7 @@ def setup_logging(research_name: str) -> None:
 ARCHIVED_HASHES: set[str] = set()
 
 ARCHIVE_FILENAMES = [
+    PROMPT_FILE,
     STATE_FILE,
     RESEARCH_PLAN_FILE,
     PROGRESS_FILE,
@@ -260,7 +261,7 @@ def archive_any_process_files(state: RWRState) -> None:
     progress_dir = files_dir / PROGRESS_DIR
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
-            if progress_file.name != "README.md":
+            if progress_file.name != "readme.md":
                 subtopic = progress_file.parent.name
                 archive_intermediate_file(progress_file, state, prepend=subtopic)
 
@@ -348,19 +349,6 @@ def get_template(template_name: str, state: RWRState, default: str) -> str:
     if not state.phase_recovered:
         return template
     return (template + get_phase_recovery_template())
-
-def get_global_template(template_name: str, default: str) -> str:
-    """Get template from global .research/templates directory."""
-    templates_dir = Path(RESEARCH_DIR) / TEMPLATES_DIR
-    os.makedirs(templates_dir, exist_ok=True)
-    file_path = templates_dir / f'{template_name}.md'
-
-    if not file_path.exists():
-        with open(file_path, 'w') as f:
-            f.write(default)
-    with open(file_path, 'r') as f:
-        template = f.read()
-    return template or default
 
 def get_phase_recovery_template() -> str:
     if 'phase_recovery' in PROMPT_TEMPLATES:
@@ -526,7 +514,7 @@ def cleanup_process_files(state: RWRState) -> None:
     progress_dir = research_dir / PROGRESS_DIR
     if progress_dir.exists():
         for progress_file in progress_dir.glob("**/*.md"):
-            if progress_file.name != "README.md":
+            if progress_file.name != "readme.md":
                 try:
                     progress_file.unlink()
                     print(f"Cleaned up: {progress_file}")
@@ -1589,6 +1577,7 @@ def main() -> int:
     try:
         # Save initial state
         save_state_to_disk(state)
+        archive_intermediate_file(Path(PROMPT_FILE), state)
 
         print(f"\n{'='*60}")
         print("RESEARCH TOOL v" + VERSION)
