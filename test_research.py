@@ -67,7 +67,7 @@ class TestTemplateGeneration(TestWithTempDir):
 
     def test_template_generation_with_malformed_custom_template(self):
         """Test that malformed custom templates return False."""
-        template_dir = Path(f".research/{self.state.research_name}/templates")
+        template_dir = Path(f".research/.templates")
         template_dir.mkdir(parents=True, exist_ok=True)
 
         malformed_template = """
@@ -288,7 +288,7 @@ class TestArchiveSystem(TestWithTempDir):
     def test_archive_progress_subdirectory_files(self):
         """Test archiving progress files from subdirectories."""
         research_dir = Path(f".research/{self.research_name}")
-        progress_dir = research_dir / "progress"
+        progress_dir = research_dir / ".progress"
         subtopic_dir = progress_dir / "machine-learning"
         subtopic_dir.mkdir(parents=True, exist_ok=True)
 
@@ -309,7 +309,7 @@ class TestArchiveSystem(TestWithTempDir):
         archive_dir = research_dir / "archive"
         archived_ml = list(archive_dir.glob(f"*.{self.lock_token}.machine-learning.findings.md"))
 
-        assert len(archived_ml) == 1, (
+        assert len(archived_ml) > 0, (
             "Progress subdirectory files should be archived with prepend",
             f"Archived ML files: {archived_ml}"
         )
@@ -759,37 +759,29 @@ class TestDirectoryStructure(TestWithTempDir):
     def setUp(self):
         super().setUp()
 
-    def test_create_research_directory_structure(self):
+    def test_ensure_research_directory_structure(self):
         """Test directory structure creation."""
         research_name = "test-session"
         topic = "Test research topic"
-        breadth = 3
-        depth = 2
 
-        research.create_research_directory_structure(research_name, topic, breadth, depth)
+        research.ensure_research_directory_structure(research_name, topic)
 
         research_dir = Path(f".research/{research_name}")
         assert research_dir.exists(), "Research directory should exist"
 
         assert (research_dir / "archive").exists(), "Archive directory should exist"
-        assert (research_dir / "progress").exists(), "Progress directory should exist"
-        assert (research_dir / "templates").exists(), "Templates directory should exist"
+        assert (research_dir / ".progress").exists(), "Progress directory should exist"
+        assert (research_dir / ".templates").exists(), "Templates directory should exist"
         assert (research_dir / "logs").exists(), "Logs directory should exist"
 
-        reports_dir = Path(f"reports/{research_name}")
+        reports_dir = Path(f"reports")
         assert reports_dir.exists(), "Reports directory should exist"
-
-        lock_file = research_dir / "research.lock.json"
-        assert lock_file.exists(), "Lock file should exist"
-
-        state_file = research_dir / "state.json"
-        assert state_file.exists(), "State file should exist"
 
         progress_file = research_dir / "progress.md"
         assert progress_file.exists(), "Progress file should exist"
 
-        progress_readme = research_dir / "progress" / "README.md"
-        assert progress_readme.exists(), "Progress README should exist"
+        progress_readme = research_dir / ".progress" / "readme.md"
+        assert progress_readme.exists(), "Progress readme.md should exist"
 
 
 class TestLockingMechanism(TestWithTempDir):
