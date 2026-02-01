@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.12"
+VERSION = "0.0.13"
 
 
 # Configuration Constants
@@ -165,6 +165,7 @@ def setup_logging() -> None:
 ARCHIVED_HASHES: set[str] = set()
 
 ARCHIVE_FILENAMES = [
+    PROMPT_FILE,
     STATE_FILE,
     REQUEST_REVIEW_FILE,
     REVIEW_PASSED_FILE,
@@ -194,7 +195,9 @@ def populate_archived_hashes(lock_token: str) -> None:
             print(f"WARNING: Could not read archive file {archive_file}: {e}")
 
 def archive_intermediate_file(file_path: Path, lock_token: str) -> None:
-    """Archive an intermediate file with a timestamp prefix if it hasn't been archived yet."""
+    """Archive an intermediate file with a timestamp prefix if it hasn't
+        been archived yet.
+    """
     if not file_path.exists():
         return
 
@@ -227,8 +230,8 @@ def archive_any_process_files(lock_token: str) -> None:
 def reorganize_archive_files(lock_token: str | None) -> None:
     """Reorganize archives into per-session directories.
 
-    Skips files matching the current lock token to allow active sessions to continue.
-    Only reorganizes sessions with 2 or more files.
+    Skips files matching the current lock token to allow active sessions
+    to continue. Only reorganizes sessions with 2 or more files.
     """
     archive_dir = Path(".ralph/archive")
     if not archive_dir.exists():
@@ -1671,6 +1674,7 @@ def main() -> int:
     try:
         # Save initial state
         save_state_to_disk(state)
+        archive_intermediate_file(Path(PROMPT_FILE), state.lock_token)
 
         # Check if implementation plan exists, create if needed
         if not Path(IMPLEMENTATION_PLAN_FILE).exists():
