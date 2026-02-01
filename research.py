@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.4"
+VERSION = "0.0.5"
 
 
 # Configuration Constants
@@ -154,12 +154,12 @@ class RWRState:
 def calculate_min_iterations(breadth: int, depth: int) -> int:
     """Calculate minimum safe iteration limit as X^(Y+1) + 5.
         A complete breadth-first search with depth Y and breadth X
-        requires approximately X^(Y+1) topics; each topic requires at
-        least one RESEARCH-REVIEW cycle (oneiteration); the +5 buffer
+        requires approximately 2*X^(Y+1) topics; each topic requires
+        about 2 RESEARCH-REVIEW cycles (two iterations); the +5 buffer
         accounts for edge cases, rejected work requiring re-research,
         and the final SYNTHESIZE-REVIEW-REVISE cycle
     """
-    return breadth ** (depth + 1) + 5
+    return 2 * breadth ** (depth + 1) + 5
 
 def slugify(text: str) -> str:
     """Convert text to a slug for filename generation."""

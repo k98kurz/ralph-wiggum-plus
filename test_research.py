@@ -690,42 +690,42 @@ class TestIterationCalculation(unittest.TestCase):
     def test_calculate_min_iterations_default(self):
         """Test default breadth=3, depth=3 calculation."""
         result = research.calculate_min_iterations(3, 3)
-        expected = 3 ** (3 + 1) + 5
+        expected = 2 * 3 ** (3 + 1) + 5
         assert result == expected, (
             f"Expected {expected}, got {result}"
         )
-        assert result == 86, (
-            f"Expected 86, got {result}"
+        assert result == 167, (
+            f"Expected 167, got {result}"
         )
 
     def test_calculate_min_iterations_small(self):
         """Test small breadth=2, depth=2 calculation."""
         result = research.calculate_min_iterations(2, 2)
-        expected = 2 ** (2 + 1) + 5
+        expected = 2 * 2 ** (2 + 1) + 5
         assert result == expected, (
             f"Expected {expected}, got {result}"
         )
-        assert result == 13, (
-            f"Expected 13, got {result}"
+        assert result == 21, (
+            f"Expected 21, got {result}"
         )
 
     def test_calculate_min_iterations_medium(self):
         """Test medium breadth=4, depth=2 calculation."""
         result = research.calculate_min_iterations(4, 2)
-        expected = 4 ** (2 + 1) + 5
+        expected = 2 * 4 ** (2 + 1) + 5
         assert result == expected, (
             f"Expected {expected}, got {result}"
         )
-        assert result == 69, (
-            f"Expected 69, got {result}"
+        assert result == 133, (
+            f"Expected 133, got {result}"
         )
 
     def test_calculate_min_iterations_zero_depth(self):
         """Test depth=0 (just root topics)."""
         result = research.calculate_min_iterations(3, 0)
-        expected = 3 ** (0 + 1) + 5
-        assert result == 8, (
-            f"Expected 8, got {result}"
+        expected = 2 * 3 ** (0 + 1) + 5
+        assert result == 11, (
+            f"Expected 11, got {result}"
         )
 
 
