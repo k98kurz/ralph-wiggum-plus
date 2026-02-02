@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.15"
+VERSION = "0.0.16"
 
 
 # Configuration Constants
@@ -790,11 +790,12 @@ def generate_commit_prompt(state: RWLState) -> str:
     - Ensure the commit tells a complete story
 
     COMMIT MESSAGE FORMAT:
-    - Use conventional commit format: type(scope): description
+    - Use conventional commit headline format: type(scope): description
     - Examples: feat(auth): add user authentication
     - Examples: fix(api): resolve null pointer exception
     - Examples: docs(readme): update installation instructions
-    - Include review feedback insights in the message
+    - Everything below the headline should be concise bulletpoints
+    - Include the most important details and review insights
 
     ACTIONS:
     1. Stage additional files/changes if needed: git add <files>
