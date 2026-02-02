@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.14"
+VERSION = "0.0.15"
 
 
 # Configuration Constants
@@ -1683,6 +1683,8 @@ def main() -> int:
             if not result.success:
                 print(f"ERROR: Failed to generate initial plan: {result.error}")
                 return 1
+        else:
+            archive_intermediate_file(Path(IMPLEMENTATION_PLAN_FILE), state.lock_token)
 
         # Validate prompt templates before starting main loop
         print("Validating prompt templates...")
