@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.16"
+VERSION = "0.0.17"
 
 
 # Configuration Constants
@@ -719,7 +719,8 @@ def generate_review_prompt(state: RWLState) -> str:
         - Update the status of the rejected tasks in the {IMPLEMENTATION_PLAN_FILE}
         file from "In Review" to "In Progress"
 
-    CRITICAL: You must create exactly one of {REVIEW_PASSED_FILE} or {REVIEW_REJECTED_FILE}."""))
+    CRITICAL: You must create exactly one of {REVIEW_PASSED_FILE} or {REVIEW_REJECTED_FILE},
+    and you must update the task status in {IMPLEMENTATION_PLAN_FILE}."""))
 
     return interpolate_template(template, state)
 
