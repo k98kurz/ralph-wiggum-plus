@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.17"
+VERSION = "0.0.18"
 
 
 # Configuration Constants
@@ -697,17 +697,21 @@ def generate_review_prompt(state: RWLState) -> str:
     INSTRUCTIONS:
     1. Read {REQUEST_REVIEW_FILE} to understand what was completed
     2. Review the implementation changes (check git status, diff staged files)
-    3. Evaluate against project requirements and best practices
+    3. Evaluate against project requirements, best practices, and maintainability
     4. Create either {REVIEW_PASSED_FILE} OR {REVIEW_REJECTED_FILE}
 
     REVIEW CRITERIA:
     - Task completion: Is the task fully implemented? This is the most important
     criterion. All else pales in comparison to consistency with the task description,
     requirements, and acceptance criteria.
-    - Code quality: Does it follow best practices?
+    - Code quality: Does it follow best practices? Is it maintainable, testable, and
+    modular, or is it excessively repetitive dogshit? Is it doing retarded things
+    like wrapping a single operation with a `pipe` function meant to chain multiple
+    operations?
     - Testing: Are appropriate and relevant tests included?
     - Documentation: Does the code have sufficient type annotations and
-    docblocks/docstrings?
+    docblocks/docstrings? Is the documentation excessively long-winded or is it
+    actually useful?
 
     OUTPUT FORMAT:
     - If PASSED:
