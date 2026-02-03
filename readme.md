@@ -11,7 +11,7 @@ welcome). Use at your own risk.
   subsequent development iterations.
 - **Dynamic Three-Phase Loop**: Supports both basic BUILD-PLAN and enhanced
   BUILD-REVIEW-PLAN/COMMIT workflows. Opt-in with `--enhanced`; default is
-  simpler BUILD-PLAN loop.
+  simpler BUILD-PLAN loop. Both modes support periodic review cycles.
 - **Session Resumption**: Crash recovery and manual resumption via persistent
   state tracking.
 - **Process Archiving**: Automatic, deduplicated archiving of all intermediate
@@ -52,7 +52,7 @@ options:
   --test-instructions TEST_INSTRUCTIONS
                         Instructions regarding testing during BUILD phase
   --review-every REVIEW_EVERY
-                        Trigger REVIEW phase every N iterations (default: 0, enhanced mode only)
+                        Trigger REVIEW phase every N iterations (default: 0)
   --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-COMMIT)
   --skip-final-review   Skip final REVIEW → BUILD → COMMIT cycle after completion
   --model MODEL         AI model to use for development (default: opencode/grok-code)
@@ -103,8 +103,9 @@ Available templates:
 
 ## Development Loops
 
-- **Basic Loop**: BUILD-PLAN
+- **Basic Loop**: BUILD-PLAN (supports periodic reviews via --review-every)
 - **Dynamic Three-Phase Enhanced Loop**: BUILD-PLAN or BUILD-REVIEW-PLAN/COMMIT
+  (supports both automatic reviews via --review-every and on-demand commit reviews)
 
 ## Basic Concept: Agentic Fail-Forward Programming
 
@@ -120,8 +121,8 @@ build phase. The loop then continues until the build agent signals completion, o
 when the max_iterations are hit.
 
 **Enhanced Loop**: An AI agent picks a task from implementation_plan.md, implements
-it, writes learnings and struggles to progress.md, then requests review whtn the
-task is comple. If rejected, the feedback informs the next planning cycle. If it
+it, writes learnings and struggles to progress.md, then requests review when the
+task is complete. If rejected, the feedback informs the next planning cycle. If it
 passed the review phase, the changes are committed and the loop continues.
 File-based state signals (request.review.md, review.passed.md, review.rejected.md)
 pass context between phases, while .ralph/state.json enables crash recovery for

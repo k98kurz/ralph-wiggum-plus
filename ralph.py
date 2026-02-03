@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.18"
+VERSION = "0.0.19"
 
 
 # Configuration Constants
@@ -1300,20 +1300,20 @@ def run_final_review_cycle(state: RWLState) -> None:
     print("Running final review cycle...")
 
     # REVIEW phase
-    review_result = execute_final_review_phase(state)
-    if not review_result.success:
+    result = execute_final_review_phase(state)
+    if not result.success:
         print("Final review failed, exiting...")
         return
 
     # BUILD phase (address review concerns rather than task)
-    build_result = execute_final_build_phase(state)
-    if not build_result.success:
+    result = execute_final_build_phase(state)
+    if not result.success:
         print("Final build failed, exiting...")
         return
 
     # COMMIT phase
-    commit_result = execute_commit_phase(state)
-    if not commit_result.success:
+    result = execute_commit_phase(state)
+    if not result.success:
         print("Final commit failed, exiting...")
         return
 
@@ -1404,44 +1404,58 @@ def main_loop(state: RWLState) -> None:
             # Either follow a REVIEW -> (PLAN/COMMIT) process or fallback to PLAN phase
             should_review, is_periodic_review = should_trigger_review(state)
             if should_review:
-                review_result = execute_review_phase(
+                result = execute_review_phase(
                     state, is_periodic_review=is_periodic_review
                 )
                 state.phase_history.append(f"REVIEW_{state.iteration}")
-                if review_result.success:
+                if result.success:
                     if Path(REVIEW_PASSED_FILE).exists():
-                        commit_result = execute_commit_phase(state)
+                        result = execute_commit_phase(state)
                         state.phase_history.append(f"COMMIT_{state.iteration}")
-                        if not commit_result.success:
+                        if not result.success:
                             if 'lost the lock' in str(result.error):
                                 return
-                            handle_phase_failure(state, Phase.COMMIT.value, commit_result.error)
+                            handle_phase_failure(state, Phase.COMMIT.value, result.error)
                     elif Path(REVIEW_REJECTED_FILE).exists():
                         # prevent over-enthusiastic build phase from prematurely ending loop
                         if check_for_completion(state):
                             Path(COMPLETED_FILE).unlink()
-                        plan_result = execute_plan_phase(state)
+                        result = execute_plan_phase(state)
                         state.phase_history.append(f"PLAN_{state.iteration}")
-                        if not plan_result.success:
+                        if not result.success:
                             if 'lost the lock' in str(result.error):
                                 return
-                            handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
+                            handle_phase_failure(state, Phase.PLAN.value, result.error)
             else:
-                plan_result = execute_plan_phase(state)
+                result = execute_plan_phase(state)
                 state.phase_history.append(f"PLAN_{state.iteration}")
-                if not plan_result.success:
+                if not result.success:
                     if 'lost the lock' in str(result.error):
                         return
-                    handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
+                    handle_phase_failure(state, Phase.PLAN.value, result.error)
 
-        # Classic mode logic
+        # Classic mode logic with periodic review
         else:
-            plan_result = execute_plan_phase(state)
+            # periodic review first
+            should_review, is_periodic_review = should_trigger_review(state)
+
+            if should_review:
+                result = execute_review_phase(
+                    state, is_periodic_review=is_periodic_review
+                )
+                state.phase_history.append(f"REVIEW_{state.iteration}")
+                if not result.success:
+                    if 'lost the lock' in str(result.error):
+                        return
+                    handle_phase_failure(state, Phase.REVIEW.value, result.error)
+
+            # then fall through to plan mode
+            result = execute_plan_phase(state)
             state.phase_history.append(f"PLAN_{state.iteration}")
-            if not plan_result.success:
+            if not result.success:
                 if 'lost the lock' in str(result.error):
                     return
-                handle_phase_failure(state, Phase.PLAN.value, plan_result.error)
+                handle_phase_failure(state, Phase.PLAN.value, result.error)
 
         # Check for completion promise
         state.is_complete = check_for_completion(state)
