@@ -12,6 +12,9 @@ welcome). Use at your own risk.
 - **Dynamic Three-Phase Loop**: Supports both basic BUILD-PLAN and enhanced
   BUILD-REVIEW-PLAN/COMMIT workflows. Opt-in with `--enhanced`; default is
   simpler BUILD-PLAN loop. Both modes support periodic review cycles.
+- **Progress Summarization**: Periodically condenses `progress.md` to prevent
+  context bloat during long sessions. Enabled by default every 10 iterations
+  in enhanced mode; opt-in for basic mode via `--summarize-every N`.
 - **Session Resumption**: Crash recovery and manual resumption via persistent
   state tracking.
 - **Process Archiving**: Automatic, deduplicated archiving of all intermediate
@@ -33,10 +36,10 @@ Ralph is a single-file Python script. You can drop it anywhere in your `$PATH`
 ```text
 usage: ralph.py [-h] [--version] [--max-iterations MAX_ITERATIONS]
                 [--test-instructions TEST_INSTRUCTIONS]
-                [--review-every REVIEW_EVERY] [--enhanced] [--skip-final-review]
-                [--model MODEL] [--review-model REVIEW_MODEL]
-                [--timeout TIMEOUT] [--push-commits] [--mock-mode] [--resume]
-                [--force-resume] [--reorganize-archive]
+                [--review-every REVIEW_EVERY] [--summarize-every SUMMARIZE_EVERY]
+                [--enhanced] [--skip-final-review] [--model MODEL]
+                [--review-model REVIEW_MODEL] [--timeout TIMEOUT] [--push-commits]
+                [--mock-mode] [--resume] [--force-resume] [--reorganize-archive]
                 [prompt]
 
 Enhanced RWL - AI Code-monkey Tool
@@ -53,6 +56,8 @@ options:
                         Instructions regarding testing during BUILD phase
   --review-every REVIEW_EVERY
                         Trigger REVIEW phase every N iterations (default: 0)
+  --summarize-every SUMMARIZE_EVERY
+                        Summarize progress.md every N iterations (default: 0, set to 10 for enhanced mode)
   --enhanced            Enable enhanced four-phase cycle (BUILD-REVIEW-PLAN-COMMIT)
   --skip-final-review   Skip final REVIEW → BUILD → COMMIT cycle after completion
   --model MODEL         AI model to use for development (default: opencode/grok-code)
@@ -70,6 +75,7 @@ Examples:
   ralph.py --enhanced "Create a REST API with tests"
   ralph.py --enhanced --skip-final-review "Complex multi-module project"
   ralph.py --review-every 3 "Regular review cycles"
+  ralph.py --summarize-every 5 "Long-running refactoring task"
   ralph.py --mock-mode "Test without external dependencies"
   ralph.py --resume
   ralph.py --force-resume
@@ -100,12 +106,15 @@ Available templates:
 - `commit.md` - Commit message generation
 - `recovery.md` - Recovery from phase failures
 - `phase_recovery.md` - Appended to templates when retrying after recovery
+- `summarize.md` - Progress file summarization
 
 ## Development Loops
 
-- **Basic Loop**: BUILD-PLAN (supports periodic reviews via --review-every)
+- **Basic Loop**: BUILD-PLAN (supports periodic reviews via --review-every and
+  summarization via --summarize-every)
 - **Dynamic Three-Phase Enhanced Loop**: BUILD-PLAN or BUILD-REVIEW-PLAN/COMMIT
-  (supports both automatic reviews via --review-every and on-demand commit reviews)
+  (supports automatic reviews, on-demand commit reviews, and summarization which
+  defaults to every 10 iterations)
 
 ## Basic Concept: Agentic Fail-Forward Programming
 

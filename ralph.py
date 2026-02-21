@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.19"
+VERSION = "0.0.20"
 
 
 # Configuration Constants
@@ -40,6 +40,7 @@ DEFAULT_REVIEW_MODEL = os.getenv("RALPH_REVIEW_MODEL", "opencode/big-pickle")
 OPENCODE_TIMEOUT = int(os.getenv("RALPH_TIMEOUT", 1200)) # 20 minutes
 DEFAULT_MAX_ITERATIONS = int(os.getenv("RALPH_MAX_ITERATIONS", 20))
 DEFAULT_REVIEW_EVERY = int(os.getenv("RALPH_REVIEW_EVERY", 0))
+DEFAULT_SUMMARIZE_EVERY = int(os.getenv("RALPH_SUMMARIZE_EVERY", 0))
 PHASE_RETRY_LIMIT = int(os.getenv("RALPH_RETRY_LIMIT", 3))
 RETRY_WAIT_SECONDS = int(os.getenv("RALPH_RETRY_WAIT", 30))
 RECOVERY_WAIT_SECONDS = int(os.getenv("RALPH_RECOVERY_WAIT", 10))
@@ -116,6 +117,7 @@ class Phase(Enum):
     RECOVERY = "RECOVERY"
     FINAL_BUILD = "FINAL_BUILD"
     FINAL_REVIEW = "FINAL_REVIEW"
+    SUMMARIZE = "SUMMARIZE"
 
 
 @dataclass
@@ -129,6 +131,7 @@ class RWLState:
     enhanced_mode: bool = field(default=False)
     test_instructions: str = field(default="You should test your work with mocks")
     review_every: int = field(default=0)
+    summarize_every: int = field(default=DEFAULT_SUMMARIZE_EVERY)
     model: str = field(default=DEFAULT_MODEL)
     review_model: str = field(default=DEFAULT_REVIEW_MODEL)
     lock_token: str | None = field(default=None)
@@ -854,6 +857,38 @@ def generate_recovery_prompt(state: RWLState) -> str:
     GOAL: Provide concise, actionable recovery guidance to get development back on track."""))
     return interpolate_template(template, state)
 
+def generate_summarize_prompt(state: RWLState) -> str:
+    """Generate the prompt for the SUMMARIZE phase."""
+    template = get_template('summarize', state, lstrip_lines(
+        f"""You are summarizing progress notes to keep them concise and actionable.
+
+    ORIGINAL PROMPT:
+    $original_prompt
+
+    PHASE: SUMMARIZE
+    Your goal is to condense the progress file while preserving essential information.
+
+    INSTRUCTIONS:
+    1. Read {PROGRESS_FILE} to understand the current state of work
+    2. Identify and preserve:
+       - Key learnings that will help future iterations
+       - Important struggles or blockers that remain unresolved
+       - Critical remaining work for pending tasks
+    3. Remove:
+       - Redundant or repeated information
+       - Outdated details that are no longer relevant
+       - Excessive verbosity or filler content
+    4. Overwrite {PROGRESS_FILE} with the condensed summary
+    5. Review {IMPLEMENTATION_PLAN_FILE} for redundant information that should be
+    in {PROGRESS_FILE}. If there is any, remove it from {IMPLEMENTATION_PLAN_FILE}.
+
+    SUMMARY FORMAT:
+    Keep the same general structure but make every word count. Be ruthless about
+    removing information that won't help future iterations.
+
+    OUTPUT: Overwrite {PROGRESS_FILE} with a concise, actionable summary."""))
+    return interpolate_template(template, state)
+
 def check_template_generation(state: RWLState) -> bool:
     """Validate all prompt templates can be generated without errors.
 
@@ -871,6 +906,7 @@ def check_template_generation(state: RWLState) -> bool:
         generate_plan_prompt,
         generate_commit_prompt,
         generate_recovery_prompt,
+        generate_summarize_prompt,
     ]
 
     for generate_fn in prompt_generators:
@@ -1194,6 +1230,36 @@ def execute_final_review_phase(state: RWLState) -> Result[str]:
     """Execute the final REVIEW phase."""
     return execute_review_phase(state, is_final_review=True)
 
+def execute_summarize_phase(state: RWLState) -> Result[str]:
+    """Execute the SUMMARIZE phase."""
+    if not state.lock_token or not check_project_lock(state.lock_token):
+        return failure(Exception('lost the lock; aborting loop'))
+
+    print("Starting SUMMARIZE phase")
+    state.current_phase = Phase.SUMMARIZE.value
+    save_state_to_disk(state)
+
+    try:
+        if not Path(PROGRESS_FILE).exists():
+            print(f"WARNING: {PROGRESS_FILE} not found, skipping summarize phase")
+            return success(f"{PROGRESS_FILE} not found, skipped")
+
+        prompt = generate_summarize_prompt(state)
+
+        result = call_opencode(
+            prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
+
+        if result.success:
+            print("SUMMARIZE phase completed successfully")
+        return result
+
+    except Exception as e:
+        error_msg = f"SUMMARIZE phase error: {e}"
+        print(f"ERROR: {error_msg}")
+        return failure(Exception(error_msg))
+
 
 # Optional phases
 def should_trigger_review(state: RWLState) -> tuple[bool, bool]:
@@ -1457,6 +1523,13 @@ def main_loop(state: RWLState) -> None:
                     return
                 handle_phase_failure(state, Phase.PLAN.value, result.error)
 
+        # Summarize progress every N iterations
+        if state.summarize_every > 0 and state.iteration % state.summarize_every == 0:
+            result = execute_summarize_phase(state)
+            state.phase_history.append(f"SUMMARIZE_{state.iteration}")
+            if not result.success:
+                print(f"WARNING: SUMMARIZE phase failed, continuing: {result.error}")
+
         # Check for completion promise
         state.is_complete = check_for_completion(state)
 
@@ -1522,6 +1595,13 @@ for complex prompts."""
         type=int,
         default=DEFAULT_REVIEW_EVERY,
         help="Trigger REVIEW phase every N iterations (default: 0, enhanced mode only)"
+    )
+
+    parser.add_argument(
+        "--summarize-every",
+        type=int,
+        default=DEFAULT_SUMMARIZE_EVERY,
+        help="Summarize progress.md every N iterations (default: 0, set to 10 for enhanced mode)"
     )
 
     parser.add_argument(
@@ -1667,10 +1747,14 @@ def main() -> int:
 
     # Initialize state if not resuming
     if not state:
+        summarize_every = args.summarize_every
+        if summarize_every == 0 and args.enhanced:
+            summarize_every = 10
         state = RWLState(
             enhanced_mode=args.enhanced,
             test_instructions=args.test_instructions,
             review_every=args.review_every,
+            summarize_every=summarize_every,
             model=args.model,
             review_model=args.review_model,
             max_iterations=args.max_iterations,
