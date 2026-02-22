@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.20"
+VERSION = "0.0.21"
 
 
 # Configuration Constants
@@ -1514,6 +1514,12 @@ def main_loop(state: RWLState) -> None:
                     if 'lost the lock' in str(result.error):
                         return
                     handle_phase_failure(state, Phase.REVIEW.value, result.error)
+
+            # Check for completion before plan phase
+            if check_for_completion(state):
+                state.is_complete = True
+                save_state_to_disk(state)
+                continue
 
             # then fall through to plan mode
             result = execute_plan_phase(state)

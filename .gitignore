@@ -5,4 +5,5 @@
 prompt*
 *plan*
 *.md
+*.swp
 !readme.md
