@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.6"
+VERSION = "0.0.7"
 
 
 # Configuration Constants
@@ -54,7 +54,6 @@ RESEARCH_DIR = ".research"
 STATE_FILE = "state.json"
 LOCK_FILE = "research.lock.json"
 RESEARCH_PLAN_FILE = "research_plan.md"
-PROGRESS_FILE = "progress.md"
 REVIEW_ACCEPTED_FILE = "review.accepted.md"
 REVIEW_REJECTED_FILE = "review.rejected.md"
 RECOVERY_NOTES_FILE = "recovery.notes.md"
@@ -198,7 +197,6 @@ ARCHIVE_FILENAMES = [
     PROMPT_FILE,
     STATE_FILE,
     RESEARCH_PLAN_FILE,
-    PROGRESS_FILE,
     REVIEW_ACCEPTED_FILE,
     REVIEW_REJECTED_FILE,
     RECOVERY_NOTES_FILE,
@@ -573,19 +571,6 @@ def ensure_research_directory_structure(
     # ensure reports/ directory exists
     Path(REPORTS_DIR).mkdir(parents=True, exist_ok=True)
 
-    progress_file = research_dir / PROGRESS_FILE
-    if not progress_file.exists():
-        progress_content = lstrip_lines(f"""# Research Progress
-
-        ## Summary
-        - Iteration: 0
-        - Topics Completed: 0 of 0
-
-        ## Recent Activity
-        - Research session initialized for: {original_topic}""")
-        with open(progress_file, "w") as f:
-            f.write(progress_content)
-
     readme_file = research_dir / PROGRESS_DIR / "readme.md"
     if not readme_file.exists():
         readme_content = lstrip_lines(f"""# Progress Directory
@@ -674,6 +659,7 @@ def generate_research_prompt(state: RWRState) -> str:
     """Generate the prompt for the RESEARCH phase."""
     plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
     progress_dir = f".research/$research_name/{PROGRESS_DIR}"
+    completed_file = f".research/$research_name/{COMPLETED_FILE}"
     template = get_template('research', state, lstrip_lines(
         f"""You are a research assistant conducting systematic research.
 
@@ -691,6 +677,8 @@ def generate_research_prompt(state: RWRState) -> str:
 
     INSTRUCTIONS:
     1. Read {plan_file} to identify topics marked "Pending" or "In Progress"
+        - If all topics have been completed, create a {completed_file} with the
+        content "<promise>COMPLETE</promise>", then halt
     2. Prioritize depth 0 topics (high-level questions) first
     3. For each topic:
        - Compile notes from web and file search tools
