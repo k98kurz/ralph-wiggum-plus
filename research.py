@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 
 
 # Configuration Constants
@@ -131,6 +131,7 @@ class RWRState:
     """Represents the current state of the RWR process."""
     breadth: int = field(default=DEFAULT_BREADTH)
     depth: int = field(default=DEFAULT_DEPTH)
+    review_every: int = field(default=DEFAULT_BREADTH)
     iteration: int = field(default=0)
     current_phase: str = field(default=Phase.RESEARCH.value)
     failed_phase: str | None = field(default=None)
@@ -784,7 +785,10 @@ def generate_synthesize_prompt(state: RWRState) -> str:
        - Clear, professional writing
 
     REPORT FORMAT:
-    # Research Report: [Topic]
+    # Research Report: $research_name
+
+    ## Topic
+    $original_topic
 
     ## Executive Summary
     [Brief overview of key findings]
@@ -807,9 +811,6 @@ def generate_synthesize_prompt(state: RWRState) -> str:
     - [Source 1]: [URL or citation]
     - [Source 2]: [URL or citation]
 
-    ## Conclusion
-    [Summary and implications]
-
     OUTPUT: Create {report_file}"""))
     return interpolate_template(template, state)
 
@@ -831,7 +832,6 @@ def generate_final_review_prompt(state: RWRState) -> str:
     INSTRUCTIONS:
     1. Read the synthesized report {report_file}
     2. Evaluate for:
-       - Completeness: Does it address all topics from {plan_file}?
        - Coherence: Is the writing logical and well-structured?
        - Quality: Are findings supported by evidence and properly cited?
        - Professionalism: Is the tone appropriate and free of errors?
@@ -1024,19 +1024,16 @@ def execute_research_phase(state: RWRState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]:
+def execute_review_phase(state: RWRState) -> Result[str]:
     """Execute the REVIEW phase."""
     if not state.lock_token or not check_project_lock(state):
         return failure(Exception('lost the lock; aborting loop'))
 
-    print(f"Starting {'FINAL ' if is_final else ''}REVIEW phase")
-    state.current_phase = Phase.FINAL_REVIEW.value if is_final else Phase.REVIEW.value
+    print(f"Starting REVIEW phase")
+    state.current_phase = Phase.REVIEW.value
 
     try:
-        if is_final:
-            prompt = generate_final_review_prompt(state)
-        else:
-            prompt = generate_review_prompt(state)
+        prompt = generate_review_prompt(state)
 
         result = call_opencode(
             prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
@@ -1049,18 +1046,53 @@ def execute_review_phase(state: RWRState, is_final: bool = False) -> Result[str]
 
             accepted_exists = accepted_file.exists()
             rejected_exists = rejected_file.exists()
-            phase_text = "FINAL REVIEW" if is_final else "REVIEW"
 
             if accepted_exists ^ rejected_exists:
-                print(f"{phase_text} phase completed successfully")
+                print(f"REVIEW phase completed successfully")
                 return result
             else:
-                return failure(Exception(f"{phase_text} must create exactly "
+                return failure(Exception(f"REVIEW must create exactly "
                     f"one of: {accepted_file}, {rejected_file}"))
         return result
 
     except Exception as e:
         error_msg = f"REVIEW phase error: {e}"
+        print(f"ERROR: {error_msg}")
+        return failure(Exception(error_msg))
+
+def execute_final_review_phase(state: RWRState) -> Result[str]:
+    """Execute the REVIEW phase."""
+    if not state.lock_token or not check_project_lock(state):
+        return failure(Exception('lost the lock; aborting loop'))
+
+    print(f"Starting FINAL_REVIEW phase")
+    state.current_phase = Phase.FINAL_REVIEW.value
+
+    try:
+        prompt = generate_final_review_prompt(state)
+
+        result = call_opencode(
+            prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
+
+        if result.success:
+            accepted_file = get_research_path(state.research_name, REVIEW_ACCEPTED_FILE)
+            rejected_file = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
+
+            accepted_exists = accepted_file.exists()
+            rejected_exists = rejected_file.exists()
+
+            if accepted_exists ^ rejected_exists:
+                print(f"FINAL_REVIEW phase completed successfully")
+                return result
+            else:
+                return failure(Exception(f"FINAL_REVIEW must create exactly "
+                    f"one of: {accepted_file}, {rejected_file}"))
+        return result
+
+    except Exception as e:
+        error_msg = f"FINAL_REVIEW phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
@@ -1154,7 +1186,7 @@ def retry_failed_phase(state: RWRState, failed_phase: str) -> Result[str]:
     elif failed_phase == Phase.SYNTHESIZE.value:
         return execute_synthesize_phase(state)
     elif failed_phase == Phase.FINAL_REVIEW.value:
-        return execute_review_phase(state, is_final=True)
+        return execute_final_review_phase(state)
     elif failed_phase == Phase.REVISE.value:
         return execute_revise_phase(state)
     else:
@@ -1228,9 +1260,9 @@ def run_final_cycle(state: RWRState) -> None:
         print("SYNTHESIZE phase failed, exiting...")
         return
 
-    review_result = execute_review_phase(state, is_final=True)
+    review_result = execute_final_review_phase(state)
     if not review_result.success:
-        print("FINAL REVIEW phase failed, exiting...")
+        print("FINAL_REVIEW phase failed, exiting...")
         return
 
     rejected_path = get_research_path(state.research_name, REVIEW_REJECTED_FILE)
@@ -1240,9 +1272,9 @@ def run_final_cycle(state: RWRState) -> None:
             print("REVISE phase failed, exiting...")
             return
 
-        review_result_2 = execute_review_phase(state, is_final=True)
+        review_result_2 = execute_final_review_phase(state)
         if not review_result_2.success:
-            print("FINAL REVIEW phase after revision failed, exiting...")
+            print("FINAL_REVIEW phase after revision failed, exiting...")
             return
 
     print("Final cycle completed successfully!")
@@ -1297,12 +1329,14 @@ def main_loop(state: RWRState) -> None:
             except Exception as e:
                 print(f"WARNING: Could not delete {REVIEW_REJECTED_FILE}: {e}")
 
-        result = execute_review_phase(state)
-        state.phase_history.append(f"REVIEW_{state.iteration}")
-        if not result.success:
-            if 'lost the lock' in str(result.error):
-                return
-            handle_phase_failure(state, Phase.REVIEW.value, str(result.error))
+        # Only run REVIEW every N iterations
+        if state.iteration % state.review_every == 0:
+            result = execute_review_phase(state)
+            state.phase_history.append(f"REVIEW_{state.iteration}")
+            if not result.success:
+                if 'lost the lock' in str(result.error):
+                    return
+                handle_phase_failure(state, Phase.REVIEW.value, str(result.error))
 
         state.is_complete = check_for_completion(state)
         save_state_to_disk(state)
@@ -1390,6 +1424,13 @@ Note also that you can use a {PROMPT_FILE} file for complex topics."""
         type=int,
         default=DEFAULT_DEPTH,
         help=f"Maximum research depth (default: {DEFAULT_DEPTH})"
+    )
+
+    parser.add_argument(
+        "--review-every",
+        type=int,
+        default=-1,
+        help="Run REVIEW phase every N iterations (default: breadth value)"
     )
 
     parser.add_argument(
@@ -1516,7 +1557,10 @@ def main() -> int:
         min_iterations = calculate_min_iterations(args.breadth, args.depth)
 
         if args.max_iterations > 0 and args.max_iterations < min_iterations:
-            print(f"WARNING: Provided max-iterations ({args.max_iterations}) is below minimum ({min_iterations})")
+            print(
+                f"WARNING: Provided max-iterations ({args.max_iterations}) is "
+                f"below minimum ({min_iterations})"
+            )
             print(f"Using minimum value: {min_iterations}")
             max_iterations = min_iterations
         elif args.max_iterations > 0:
@@ -1553,6 +1597,10 @@ def main() -> int:
     ensure_research_directory_structure(args.name, topic_content)
 
     if not state:
+        # Set review_every to breadth if not explicitly provided
+        if args.review_every == -1:
+            args.review_every = args.breadth
+
         print("CREATING STATE")
         state = RWRState(
             original_topic=topic_content,
@@ -1565,7 +1613,8 @@ def main() -> int:
             mock_mode=args.mock_mode,
             timeout=args.timeout,
             research_name=slugify(args.name),
-            iteration=0
+            iteration=0,
+            review_every=args.review_every
         )
 
     state.lock_token = get_project_lock(args.name, args.force_resume)
