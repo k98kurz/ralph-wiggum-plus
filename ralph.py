@@ -31,7 +31,7 @@ import sys
 
 
 # semver string
-VERSION = "0.0.21"
+VERSION = "0.0.22"
 
 
 # Configuration Constants
@@ -544,7 +544,9 @@ def generate_initial_plan_prompt(state: RWLState) -> str:
     ## Dependencies
     Note any task dependencies or prerequisites
 
-    OUTPUT: Create {IMPLEMENTATION_PLAN_FILE} with your plan"""))
+    OUTPUT: Create {IMPLEMENTATION_PLAN_FILE} with your plan
+
+    IMPORTANT: Do NOT begin the work. ONLY create the plan."""))
     return interpolate_template(template, state)
 
 def generate_plan_review_prompt(state: RWLState) -> str:
@@ -567,7 +569,9 @@ def generate_plan_review_prompt(state: RWLState) -> str:
     8. Provide constructive criticism.
 
     OUTPUT: Create {PLAN_REVIEW_FILE} with your analysis. If the plan does not need any
-    updates, skip this step."""))
+    updates, skip this step.
+
+    IMPORTANT: Do NOT begin the code work. ONLY review the plan."""))
     return interpolate_template(template, state)
 
 def generate_revise_plan_prompt(state: RWLState) -> str:
@@ -587,7 +591,9 @@ def generate_revise_plan_prompt(state: RWLState) -> str:
     {IMPLEMENTATION_PLAN_FILE} to address those concerns/incorporate that feedback.
     5. Do NOT over-specify with irrelevant details. Leave something to the
     judgment of the implementer.
-    6. Delete the {PLAN_REVIEW_FILE} file when you are done."""))
+    6. Delete the {PLAN_REVIEW_FILE} file when you are done.
+
+    IMPORTANT: Do NOT begin the code work. ONLY revise the plan."""))
     return interpolate_template(template, state)
 
 def generate_build_prompt(state: RWLState) -> str:
