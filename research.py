@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.7"
+VERSION = "0.0.8"
 
 
 # Configuration Constants
@@ -46,6 +46,7 @@ PHASE_RETRY_LIMIT = int(os.getenv("PHASE_RETRY_LIMIT", 3))
 RETRY_WAIT_SECONDS = int(os.getenv("RETRY_WAIT_SECONDS", 30))
 RECOVERY_WAIT_SECONDS = int(os.getenv("RECOVERY_WAIT_SECONDS", 10))
 STALE_LOCK_TIMEOUT = int(os.getenv("STALE_LOCK_TIMEOUT", 3600))
+FILESYSTEM_SYNC_DELAY = float(os.getenv("FILESYSTEM_SYNC_DELAY", 0.5))
 
 # Directory Constants
 RESEARCH_DIR = ".research"
@@ -66,6 +67,12 @@ LOGS_DIR = "logs"
 TEMPLATES_DIR = ".templates"
 PROGRESS_DIR = ".progress"
 REPORTS_DIR = "reports"
+SYNTHESIS_DIR = "synthesis"
+
+# Threshold Constants for Batch Synthesis
+SYNTHESIZE_THRESHOLD_FILES = 20
+SYNTHESIZE_THRESHOLD_BYTES = 500_000  # 500KB
+SYNTHESIS_PLAN_FILE = "synthesis_plan.md"
 
 
 # functional Result type stuff
@@ -120,6 +127,8 @@ class Phase(Enum):
     RESEARCH = "RESEARCH"
     REVIEW = "REVIEW"
     SYNTHESIZE = "SYNTHESIZE"
+    PLAN_SYNTHESIS = "PLAN_SYNTHESIS"
+    PARTIAL_SYNTHESIS = "PARTIAL_SYNTHESIS"
     FINAL_REVIEW = "FINAL_REVIEW"
     REVISE = "REVISE"
     RECOVERY = "RECOVERY"
@@ -148,6 +157,8 @@ class RWRState:
     timeout: int = field(default=OPENCODE_TIMEOUT)
     research_name: str = field(default="")
     original_topic: str = field(default="")
+    synthesize_threshold_files: int = field(default=SYNTHESIZE_THRESHOLD_FILES)
+    synthesize_threshold_bytes: int = field(default=SYNTHESIZE_THRESHOLD_BYTES)
 
 
 # helper functions
@@ -253,6 +264,7 @@ def archive_intermediate_file(
 
 def archive_any_process_files(state: RWRState) -> None:
     """Check for and archive any intermediate files."""
+    sleep(FILESYSTEM_SYNC_DELAY)
     files_dir = get_research_path(state.research_name)
     for file_name in ARCHIVE_FILENAMES:
         archive_intermediate_file(files_dir / file_name, state)
@@ -742,6 +754,49 @@ def generate_review_prompt(state: RWRState) -> str:
     {rejected_file}."""))
     return interpolate_template(template, state)
 
+
+def should_use_batch_synthesis(state: RWRState) -> bool:
+    """Check if batch synthesis should be used based on thresholds."""
+    progress_dir = Path(get_research_path(state.research_name, PROGRESS_DIR))
+    if not progress_dir.exists():
+        return False
+
+    progress_files = list(progress_dir.glob("**/*.md"))
+    file_count = len(progress_files)
+    total_bytes = sum(f.stat().st_size for f in progress_files if f.exists())
+
+    return file_count >= state.synthesize_threshold_files or \
+           total_bytes >= state.synthesize_threshold_bytes
+
+
+def parse_synthesis_plan(state: RWRState) -> dict[str, list[str]]:
+    """Parse synthesis_plan.md and return group_id -> [file_list] mapping."""
+    plan_path = get_research_path(state.research_name, SYNTHESIS_PLAN_FILE)
+    if not plan_path.exists():
+        return {}
+
+    content = plan_path.read_text()
+    groups: dict[str, list[str]] = {}
+    current_group: str | None = None
+
+    for line in content.split("\n"):
+        line = line.strip()
+        if line.startswith("## Group") or line.startswith("## group"):
+            parts = line.split(":", 1)
+            if len(parts) > 1:
+                current_group = parts[1].strip().lower().replace(" ", "_")
+            else:
+                current_group = f"group_{len(groups) + 1:03d}"
+            if current_group:
+                groups[current_group] = []
+        elif line.startswith("- ") and current_group:
+            file_path = line[2:].strip()
+            if file_path:
+                groups[current_group].append(file_path)
+
+    return groups
+
+
 def generate_synthesize_prompt(state: RWRState) -> str:
     """Generate the prompt for the SYNTHESIZE phase (final report generation)."""
     plan_file = f".research/$research_name/{RESEARCH_PLAN_FILE}"
@@ -943,7 +998,7 @@ def check_template_generation(state: RWRState) -> bool:
 
 # OpenCode calls
 def call_opencode(
-        prompt: str, model: str, lock_token: str, timeout: int = OPENCODE_TIMEOUT,
+        prompt: str, model: str, state: RWRState, timeout: int = OPENCODE_TIMEOUT,
         mock_mode: bool = False
     ) -> Result[str]:
     """Call OpenCode with the given prompt and return success status and output."""
@@ -962,6 +1017,8 @@ def call_opencode(
             timeout=timeout,
             cwd=Path.cwd()
         )
+
+        archive_any_process_files(state)
 
         if result.returncode == 0:
             return success(result.stdout)
@@ -983,7 +1040,7 @@ def generate_initial_plan(state: RWRState) -> Result[str]:
     """Generate the initial reserach plan when none exists."""
     initial_plan_prompt = generate_initial_plan_prompt(state)
     return call_opencode(
-        initial_plan_prompt, state.model, state.lock_token or "",
+        initial_plan_prompt, state.model, state,
         timeout=state.timeout, mock_mode=state.mock_mode
     )
 
@@ -994,12 +1051,13 @@ def execute_research_phase(state: RWRState) -> Result[str]:
 
     print(f"Starting RESEARCH phase")
     state.current_phase = Phase.RESEARCH.value
+    save_state_to_disk(state)
 
     try:
         prompt = generate_research_prompt(state)
 
         result = call_opencode(
-            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            prompt, state.model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
@@ -1019,12 +1077,13 @@ def execute_review_phase(state: RWRState) -> Result[str]:
 
     print(f"Starting REVIEW phase")
     state.current_phase = Phase.REVIEW.value
+    save_state_to_disk(state)
 
     try:
         prompt = generate_review_prompt(state)
 
         result = call_opencode(
-            prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
+            prompt, state.review_model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
@@ -1055,12 +1114,13 @@ def execute_final_review_phase(state: RWRState) -> Result[str]:
 
     print(f"Starting FINAL_REVIEW phase")
     state.current_phase = Phase.FINAL_REVIEW.value
+    save_state_to_disk(state)
 
     try:
         prompt = generate_final_review_prompt(state)
 
         result = call_opencode(
-            prompt, state.review_model, state.lock_token or "", timeout=state.timeout,
+            prompt, state.review_model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
@@ -1084,30 +1144,259 @@ def execute_final_review_phase(state: RWRState) -> Result[str]:
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
 
-def execute_synthesize_phase(state: RWRState) -> Result[str]:
-    """Execute the SYNTHESIZE phase."""
+
+def generate_plan_synthesis_prompt(state: RWRState) -> str:
+    """Generate the prompt for the PLAN_SYNTHESIS phase."""
+    research_dir = f".research/$research_name"
+    plan_file = f"{research_dir}/{RESEARCH_PLAN_FILE}"
+    progress_dir = f"{research_dir}/{PROGRESS_DIR}"
+    synthesis_plan_file = f"{research_dir}/{SYNTHESIS_PLAN_FILE}"
+    template = get_template('plan_synthesis', state, lstrip_lines(
+        f"""You are creating a synthesis plan to organize research findings.
+
+    TOPIC: $original_topic
+
+    PHASE: PLAN_SYNTHESIS
+    Your goal is to:
+    1. Read {plan_file} to understand the topic hierarchy
+    2. List all {progress_dir}/[topic_slug].md files
+    3. Group related topics together using the plan hierarchy as a guide
+    4. Output {synthesis_plan_file} with groupings
+
+    INSTRUCTIONS:
+    - Each group should contain related topics from the research plan
+    - Aim for balanced groups (not too many files in one group, not too many groups)
+    - Use descriptive group names that reflect the topic category
+
+    OUTPUT FORMAT:
+    ## Group 1: [Group Name]
+    - progress/topic_a.md
+    - progress/topic_b.md
+
+    ## Group 2: [Group Name]
+    - progress/topic_c.md
+    - progress/topic_d.md
+    ...
+
+    OUTPUT: Create {synthesis_plan_file} with your groupings."""))
+    return interpolate_template(template, state)
+
+
+def execute_plan_synthesis_phase(state: RWRState) -> Result[str]:
+    """Execute the PLAN_SYNTHESIS phase."""
     if not state.lock_token or not check_project_lock(state):
         return failure(Exception('lost the lock; aborting loop'))
 
-    print("Starting SYNTHESIZE phase")
-    state.current_phase = Phase.SYNTHESIZE.value
+    print("Starting PLAN_SYNTHESIS phase")
+    state.current_phase = Phase.PLAN_SYNTHESIS.value
+    save_state_to_disk(state)
 
     try:
-        prompt = generate_synthesize_prompt(state)
+        synthesis_dir = get_research_path(state.research_name, SYNTHESIS_DIR)
+        synthesis_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt = generate_plan_synthesis_prompt(state)
 
         result = call_opencode(
-            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            prompt, state.model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
         if result.success:
-            print("SYNTHESIZE phase completed successfully")
+            print("PLAN_SYNTHESIS phase completed successfully")
         return result
 
     except Exception as e:
-        error_msg = f"SYNTHESIZE phase error: {e}"
+        error_msg = f"PLAN_SYNTHESIS phase error: {e}"
         print(f"ERROR: {error_msg}")
         return failure(Exception(error_msg))
+
+
+def generate_partial_synthesis_prompt(
+        state: RWRState, group_id: str, group_files: list[str]
+    ) -> str:
+    """Generate the prompt for PARTIAL_SYNTHESIS of a single group."""
+    research_dir = f".research/$research_name"
+    progress_dir = f"{research_dir}/{PROGRESS_DIR}"
+    synthesis_dir = f"{research_dir}/{SYNTHESIS_DIR}"
+    template = get_template('partial_synthesis', state, lstrip_lines(
+        f"""You are synthesizing a subset of research findings into a focused report.
+
+    TOPIC: $original_topic
+    GROUP: {group_id}
+
+    PHASE: PARTIAL_SYNTHESIS
+    Read the following progress files and create a consolidated summary:
+    {chr(10).join(f'- {f}' for f in group_files)}
+
+    INSTRUCTIONS:
+    - Synthesize the findings from these related topics
+    - Include key findings, sources, and how these topics relate to each other
+    - Keep the summary focused and cohesive
+
+    OUTPUT: Write to {synthesis_dir}/{group_id}.md
+    Include an overview of what this group covers and the key insights."""))
+    return interpolate_template(template, state)
+
+
+def execute_partial_synthesis_phase(state: RWRState) -> Result[str]:
+    """Execute PARTIAL_SYNTHESIS for each group sequentially."""
+    if not state.lock_token or not check_project_lock(state):
+        return failure(Exception('lost the lock; aborting loop'))
+
+    print("Starting PARTIAL_SYNTHESIS phase")
+    state.current_phase = Phase.PARTIAL_SYNTHESIS.value
+    save_state_to_disk(state)
+
+    try:
+        groups = parse_synthesis_plan(state)
+        if not groups:
+            return failure(Exception("No groups found in synthesis plan"))
+
+        for group_id, group_files in groups.items():
+            print(f"  Synthesizing group: {group_id}")
+            prompt = generate_partial_synthesis_prompt(state, group_id, group_files)
+
+            result = call_opencode(
+                prompt, state.model, state, timeout=state.timeout,
+                mock_mode=state.mock_mode
+            )
+
+            if not result.success:
+                return failure(Exception(f"Partial synthesis failed for {group_id}"))
+
+        print("PARTIAL_SYNTHESIS phase completed successfully")
+        return success("All partial syntheses completed")
+
+    except Exception as e:
+        error_msg = f"PARTIAL_SYNTHESIS phase error: {e}"
+        print(f"ERROR: {error_msg}")
+        return failure(Exception(error_msg))
+
+
+def generate_final_synthesis_prompt(state: RWRState) -> str:
+    """Generate the prompt for FINAL_SYNTHESIS."""
+    research_dir = f".research/$research_name"
+    plan_file = f"{research_dir}/{RESEARCH_PLAN_FILE}"
+    synthesis_dir = f"{research_dir}/{SYNTHESIS_DIR}"
+    report_file = f"{REPORTS_DIR}/$research_name.md"
+    template = get_template('final_synthesis', state, lstrip_lines(
+        f"""You are creating the final research report from partial syntheses.
+
+    TOPIC: $original_topic
+
+    PARAMETERS:
+    - Breadth: $breadth
+    - Depth: $depth
+    - Iterations: $iteration
+
+    PHASE: FINAL_SYNTHESIS
+    Your goal is to compile all partial synthesis files into a unified final report.
+
+    INSTRUCTIONS:
+    1. Read all {synthesis_dir}/group_*.md files
+    2. Read {plan_file} for topic hierarchy
+    3. Create {report_file} with:
+       - Executive summary of key findings
+       - Findings organized by topic hierarchy
+       - Sources/references section with proper citations
+       - Clear, professional writing
+
+    REPORT FORMAT:
+    # Research Report: $research_name
+
+    ## Topic
+    $original_topic
+
+    ## Executive Summary
+    [Brief overview of key findings]
+
+    ## Introduction
+    [Context and research objectives]
+
+    ## Methodology
+    [Brief description of research approach]
+
+    ## Findings
+
+    ### [Topic 1]
+    [Detailed findings with sources]
+
+    ### [Subtopic 1.1]
+    [Subtopic findings with sources]
+
+    ## Sources
+    - [Source 1]: [URL or citation]
+    - [Source 2]: [URL or citation]
+
+    OUTPUT: Create {report_file}"""))
+    return interpolate_template(template, state)
+
+
+def execute_final_synthesis_phase(state: RWRState) -> Result[str]:
+    """Execute FINAL_SYNTHESIS - compile final report from partial syntheses."""
+    if not state.lock_token or not check_project_lock(state):
+        return failure(Exception('lost the lock; aborting loop'))
+
+    print("Starting FINAL_SYNTHESIS phase")
+    state.current_phase = Phase.SYNTHESIZE.value
+    save_state_to_disk(state)
+
+    try:
+        prompt = generate_final_synthesis_prompt(state)
+
+        result = call_opencode(
+            prompt, state.model, state, timeout=state.timeout,
+            mock_mode=state.mock_mode
+        )
+
+        if result.success:
+            print("FINAL_SYNTHESIS phase completed successfully")
+        return result
+
+    except Exception as e:
+        error_msg = f"FINAL_SYNTHESIS phase error: {e}"
+        print(f"ERROR: {error_msg}")
+        return failure(Exception(error_msg))
+
+
+def execute_synthesize_phase(state: RWRState) -> Result[str]:
+    """Execute the SYNTHESIZE phase (handles both batch and direct paths)."""
+    if not state.lock_token or not check_project_lock(state):
+        return failure(Exception('lost the lock; aborting loop'))
+
+    if should_use_batch_synthesis(state):
+        print("Using batch synthesis (thresholds exceeded)")
+        plan_result = execute_plan_synthesis_phase(state)
+        if not plan_result.success:
+            return plan_result
+
+        partial_result = execute_partial_synthesis_phase(state)
+        if not partial_result.success:
+            return partial_result
+
+        return execute_final_synthesis_phase(state)
+    else:
+        print("Starting SYNTHESIZE phase")
+        state.current_phase = Phase.SYNTHESIZE.value
+        save_state_to_disk(state)
+
+        try:
+            prompt = generate_synthesize_prompt(state)
+
+            result = call_opencode(
+                prompt, state.model, state, timeout=state.timeout,
+                mock_mode=state.mock_mode
+            )
+
+            if result.success:
+                print("SYNTHESIZE phase completed successfully")
+            return result
+
+        except Exception as e:
+            error_msg = f"SYNTHESIZE phase error: {e}"
+            print(f"ERROR: {error_msg}")
+            return failure(Exception(error_msg))
 
 def execute_revise_phase(state: RWRState) -> Result[str]:
     """Execute the REVISE phase."""
@@ -1116,12 +1405,13 @@ def execute_revise_phase(state: RWRState) -> Result[str]:
 
     print("Starting REVISE phase")
     state.current_phase = Phase.REVISE.value
+    save_state_to_disk(state)
 
     try:
         prompt = generate_revise_prompt(state)
 
         result = call_opencode(
-            prompt, state.model, state.lock_token or "", timeout=state.timeout,
+            prompt, state.model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
@@ -1141,6 +1431,7 @@ def execute_recovery_phase(state: RWRState) -> Result[str]:
 
     print(f"Starting RECOVERY phase for {state.failed_phase}")
     state.current_phase = Phase.RECOVERY.value
+    save_state_to_disk(state)
 
     try:
         sleep(RECOVERY_WAIT_SECONDS)
@@ -1150,7 +1441,7 @@ def execute_recovery_phase(state: RWRState) -> Result[str]:
             return prompt
 
         result = call_opencode(
-            prompt.data, state.model, state.lock_token or "", timeout=state.timeout,
+            prompt.data, state.model, state, timeout=state.timeout,
             mock_mode=state.mock_mode
         )
 
@@ -1173,6 +1464,10 @@ def retry_failed_phase(state: RWRState, failed_phase: str) -> Result[str]:
         return execute_review_phase(state)
     elif failed_phase == Phase.SYNTHESIZE.value:
         return execute_synthesize_phase(state)
+    elif failed_phase == Phase.PLAN_SYNTHESIS.value:
+        return execute_plan_synthesis_phase(state)
+    elif failed_phase == Phase.PARTIAL_SYNTHESIS.value:
+        return execute_partial_synthesis_phase(state)
     elif failed_phase == Phase.FINAL_REVIEW.value:
         return execute_final_review_phase(state)
     elif failed_phase == Phase.REVISE.value:
@@ -1355,8 +1650,6 @@ def main_loop(state: RWRState) -> None:
 
         cleanup_process_files(state)
 
-        archive_any_process_files(state)
-
         release_project_lock(state)
 
         print("\n" + "="*60)
@@ -1419,6 +1712,20 @@ Note also that you can use a {PROMPT_FILE} file for complex topics."""
         type=int,
         default=-1,
         help="Run REVIEW phase every N iterations (default: breadth value)"
+    )
+
+    parser.add_argument(
+        "--synthesize-threshold-files",
+        type=int,
+        default=SYNTHESIZE_THRESHOLD_FILES,
+        help=f"File count threshold for batch synthesis (default: {SYNTHESIZE_THRESHOLD_FILES})"
+    )
+
+    parser.add_argument(
+        "--synthesize-threshold-bytes",
+        type=int,
+        default=SYNTHESIZE_THRESHOLD_BYTES,
+        help=f"Byte count threshold for batch synthesis (default: {SYNTHESIZE_THRESHOLD_BYTES})"
     )
 
     parser.add_argument(
@@ -1602,7 +1909,9 @@ def main() -> int:
             timeout=args.timeout,
             research_name=slugify(args.name),
             iteration=0,
-            review_every=args.review_every
+            review_every=args.review_every,
+            synthesize_threshold_files=args.synthesize_threshold_files,
+            synthesize_threshold_bytes=args.synthesize_threshold_bytes
         )
 
     state.lock_token = get_project_lock(args.name, args.force_resume)

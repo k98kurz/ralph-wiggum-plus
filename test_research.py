@@ -235,8 +235,6 @@ class TestArchiveSystem(TestWithTempDir):
     def test_archive_any_process_files(self):
         """Test batch archiving of all tracked process files."""
         research_dir = Path(f".research/{self.research_name}")
-        progress_file = research_dir / "progress.md"
-        progress_file.write_text("Progress content")
 
         accepted_file = research_dir / "review.accepted.md"
         accepted_file.write_text("Review accepted")
@@ -260,14 +258,8 @@ class TestArchiveSystem(TestWithTempDir):
 
         archive_dir = research_dir / "archive"
 
-        archived_progress = list(archive_dir.glob(f"*.{self.lock_token}.progress.md"))
         archived_accepted = list(archive_dir.glob(f"*.{self.lock_token}.review.accepted.md"))
         archived_rejected = list(archive_dir.glob(f"*.{self.lock_token}.review.rejected.md"))
-
-        assert len(archived_progress) == 1, (
-            "progress.md should be archived",
-            f"Archived progress files: {archived_progress}"
-        )
 
         assert len(archived_accepted) == 1, (
             "review.accepted.md should be archived",
@@ -776,9 +768,6 @@ class TestDirectoryStructure(TestWithTempDir):
 
         reports_dir = Path(f"reports")
         assert reports_dir.exists(), "Reports directory should exist"
-
-        progress_file = research_dir / "progress.md"
-        assert progress_file.exists(), "Progress file should exist"
 
         progress_readme = research_dir / ".progress" / "readme.md"
         assert progress_readme.exists(), "Progress readme.md should exist"
