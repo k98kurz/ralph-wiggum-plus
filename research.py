@@ -33,7 +33,7 @@ import subprocess
 import sys
 
 # semver string
-VERSION = "0.0.8"
+VERSION = "0.0.9"
 
 
 # Configuration Constants
@@ -184,6 +184,61 @@ def get_research_path(research_name: str, *path_parts: str) -> Path:
     return Path(f"{RESEARCH_DIR}/{research_name}", *path_parts)
 
 
+# setup functions
+def get_search_tool_code() -> str:
+    return """
+import { tool } from "@opencode-ai/plugin";
+
+export default tool({
+  description: "Search the web using DuckDuckGo (via ddgr) for real-time research.",
+  args: {
+    query: tool.schema.string().describe("The search query to look up."),
+    count: tool.schema.number().optional().describe("Number of results to return (default 5).")
+  },
+  async execute({ query, count = 5 }) {
+    const { execSync } = await import('node:child_process');
+    try {
+      // Escape quotes safely
+      const safeQuery = query.replace(/"/g, '\\\\"');
+      const cmd = `ddgr --json -n ${count} "${safeQuery}"`;
+
+      const stdout = execSync(cmd, { encoding: 'utf-8', timeout: 10000 });
+      return stdout || "No results found.";
+    } catch (err) {
+      return `Error executing ddgr: ${err.message}`;
+    }
+  }
+});
+"""
+
+def setup_duckduckgo_search() -> None:
+    """Set up DuckDuckGo search tool for opencode if not already configured."""
+    try:
+        result = subprocess.run(["ddgr", "--help"], capture_output=True, timeout=5)
+        if result.returncode != 0:
+            print(
+                "WARNING: ddgr command not found. Install with "
+                "'uv tool install ddgr' to enable DuckDuckGo search as a "
+                "backup method to get around Exa search free tier rate limiting."
+            )
+            return
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        print(
+            "WARNING: ddgr command not found. Install with "
+            "'uv tool install ddgr' to enable DuckDuckGo search as a "
+            "backup method to get around Exa search free tier rate limiting."
+        )
+        return
+
+    global_tools_path = Path.home() / ".config/opencode/tools/search.js"
+    local_tools_path = Path(".opencode/tools/search.js")
+
+    if global_tools_path.exists() or local_tools_path.exists():
+        return
+
+    local_tools_path.parent.mkdir(parents=True, exist_ok=True)
+    local_tools_path.write_text(get_search_tool_code())
+
 def setup_signal_handlers(state: RWRState) -> None:
     """Set up signal handlers for graceful shutdown."""
     def signal_handler(signum: int, frame) -> None:
@@ -193,7 +248,6 @@ def setup_signal_handlers(state: RWRState) -> None:
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-
 
 def setup_logging(research_name: str) -> None:
     """Set up logging directory structure."""
@@ -1807,6 +1861,7 @@ def main() -> int:
 
     validate_environment(args.name)
     setup_logging(args.name)
+    setup_duckduckgo_search()
 
     # Handle resume mode
     if args.resume or args.force_resume:
